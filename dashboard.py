@@ -5,11 +5,16 @@ from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
 from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayout,QComboBox,QSlider,QCheckBox,QPushButton,QColorDialog,QDialogButtonBox,QLabel,QMessageBox,QTabWidget,QLineEdit,QSpinBox
 from PySide6.QtCore import QProcess
 import psutil
+import urllib.request
+from bloom import Bloom
+from PySide6.QtGui import QImage
+from PySide6.QtCore import QPointF
 from local_spectrum import LiveSpectrum, RATE
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
+  self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[]
   self.spectrum = LiveSpectrum()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
@@ -47,6 +52,42 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True)
    (self.sync_root/'dashboard-show.request').write_text('')
   except OSError as e:self.sync_error=str(e)
+ def bloom_menu(self):
+  choice=Bloom(self,self.accent).exec()-2
+  if choice==0:self.open_settings(1)
+  elif choice==1:self.open_settings(0)
+  elif choice==2:self.open_player()
+  elif choice==3:self.open_settings(2)
+  elif choice==4:QMessageBox.information(self,'Sakura • System','Automatic updates on launch\n'+str(self.sync_status.get('scanner','Backend unavailable'))+'\n'+str(self.sync_status.get('spotify',''))+'\n'+self.audio_status)
+ def command(self,action,**data):
+  try:self.write_setting('dashboard-player.request',dict(time=time.time(),action=action,**data))
+  except OSError as e:QMessageBox.warning(self,'Spotify',str(e))
+ def open_player(self):
+  dlg=QDialog(self);dlg.setWindowTitle('Sakura • Spotify');dlg.setMinimumWidth(420);layout=QFormLayout(dlg)
+  devices=QComboBox();available=[d for d in self.devices if d.get('id') and not d.get('is_restricted')]
+  for d in available:devices.addItem(d.get('name','Device')+(' • active' if d.get('is_active') else ''),d['id'])
+  for i,d in enumerate(available):
+   if d.get('is_active'):devices.setCurrentIndex(i)
+  layout.addRow('Spotify Connect',devices);transfer=QPushButton('Transfer playback');transfer.setEnabled(bool(available));transfer.clicked.connect(lambda:(self.command('transfer',device=devices.currentData()),dlg.accept()));layout.addRow(transfer)
+  volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(int((self.player.get('device') or {}).get('volume_percent') or 0));layout.addRow('Volume',volume);volume.sliderReleased.connect(lambda:self.command('volume',value=volume.value()))
+  playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist);play=QPushButton('Play playlist');play.clicked.connect(lambda:(self.command('playlist',value=playlist.text()),dlg.accept()));layout.addRow(play)
+  shuffle=QPushButton('Toggle shuffle');shuffle.clicked.connect(lambda:(self.command('shuffle',value=not self.player.get('shuffle_state',False)),dlg.accept()));layout.addRow(shuffle)
+  repeat=QComboBox();repeat.addItems(['off','context','track']);repeat.setCurrentText(self.player.get('repeat_state','off'));repeat.activated.connect(lambda _:self.command('repeat',value=repeat.currentText()));layout.addRow('Repeat',repeat)
+  account=QPushButton('Account and advanced settings');account.clicked.connect(lambda:(dlg.reject(),self.open_sync_settings()));layout.addRow(account)
+  close=QPushButton('Close');close.clicked.connect(dlg.accept);layout.addRow(close);dlg.exec()
+ def poll_player(self):
+  try:
+   state=json.loads((self.sync_root/'dashboard-player.json').read_text())
+   if abs(time.time()-state['time'])>45:return
+   self.player=state.get('player') or {};self.devices=state.get('devices',[])
+   item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[-1].get('url','') if images else ''
+   if url and url!=self.art_url and url.startswith('https://'):
+    with urllib.request.urlopen(url,timeout=4) as response:raw=response.read(4000000)
+    image=QImage.fromData(raw)
+    if not image.isNull():
+     small=image.scaled(24,24);colors=[small.pixelColor(x,y) for x in range(24) for y in range(24)];colors.sort(key=lambda c:c.saturationF()*min(1,c.valueF()*2),reverse=True);c=colors[:100];avg=QColor(*(int(sum(getattr(v,k)() for v in c)/len(c)) for k in ('red','green','blue')));h,s,v,_=avg.getHsvF();self.art_accent=QColor.fromHsvF(max(0,h),max(.35,min(.8,s)),.95);self.art=image;self.art_url=url
+   if not url:self.art=QImage();self.art_url='';self.art_accent=QColor('#f478d7')
+  except (OSError,ValueError,TypeError,KeyError):pass
  def open_rgb_settings(self):
   self.open_settings(1)
  def open_settings(self,index=0):
@@ -76,6 +117,7 @@ class Dashboard(QWidget):
   if not isinstance(view,dict):view={}
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
+  adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
@@ -103,7 +145,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.text().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60));self.load_display()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -175,6 +217,7 @@ class Dashboard(QWidget):
  def poll(self):
   while True:
    self.spotify_target=self.discover_spotify()
+   self.poll_player()
    def cmd(a):
     try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
     except Exception:return ''
@@ -182,7 +225,7 @@ class Dashboard(QWidget):
  def keyPressEvent(self,e):
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
-  if e.key()==Qt.Key_F2:self.open_settings()
+  if e.key()==Qt.Key_F2:self.bloom_menu()
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
  def mousePressEvent(self,e):
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
