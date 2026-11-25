@@ -38,6 +38,17 @@ def profiles_panel(owner):
 def discord_panel(owner):
  dlg=InlinePanel(owner);dlg.setWindowTitle('Discord • Read-only connection');layout=QFormLayout(dlg)
  hint=QLabel('Create a Discord bot, invite it to your server, then enter its bot token and your user/server IDs. Enable Message Content Intent only if you want messages from one selected channel. Tokens are kept in memory for this session only.');hint.setWordWrap(True);layout.addRow(hint)
+ import importlib.util
+ if importlib.util.find_spec('discord') is None:
+  install=QPushButton('Install optional Discord support');layout.addRow(install)
+  def install_discord():
+   import sys,subprocess,threading
+   install.setEnabled(False);hint.setText('Installing Discord support. Reopen this panel after installation.')
+   def work():
+    try:subprocess.run([sys.executable,'-m','pip','install','discord.py>=2.5,<3'],check=True,timeout=120)
+    except Exception:pass
+   threading.Thread(target=work,daemon=True).start()
+  install.clicked.connect(install_discord)
  token=QLineEdit();token.setEchoMode(QLineEdit.EchoMode.Password);layout.addRow('Bot token',token)
  user=QLineEdit();guild=QLineEdit();channel=QLineEdit()
  for name,field in [('Your Discord user ID',user),('Server ID',guild),('Text channel ID (optional)',channel)]:layout.addRow(name,field)
