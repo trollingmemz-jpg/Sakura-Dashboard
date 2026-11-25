@@ -2,7 +2,7 @@ import sys, math, random, time, subprocess, threading, os, glob, json
 from pathlib import Path
 from PySide6.QtCore import Qt,QTimer,QRectF
 from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
-from PySide6.QtWidgets import QApplication,QWidget
+from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayout,QComboBox,QSlider,QCheckBox,QPushButton,QColorDialog,QDialogButtonBox,QLabel,QMessageBox
 from PySide6.QtCore import QProcess
 import psutil
 from sakura_connect.spectrum import LiveSpectrum, RATE
@@ -46,6 +46,41 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True)
    (self.sync_root/'dashboard-show.request').write_text('')
   except OSError as e:self.sync_error=str(e)
+ def open_rgb_settings(self):
+  dlg=QDialog(self);dlg.setWindowTitle('Sakura • RGB control');dlg.setMinimumWidth(420)
+  dlg.setStyleSheet('QDialog{background:#201329;color:#f5d9ef} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox{background:#39253e;color:#f5d9ef;padding:8px;border-radius:5px}')
+  layout=QVBoxLayout(dlg);form=QFormLayout();layout.addLayout(form)
+  try:profile=json.loads((self.sync_root/'dashboard-rgb.json').read_text())
+  except (OSError,ValueError):profile={}
+  if not isinstance(profile,dict):profile={}
+  try:legacy=json.loads((self.sync_root/'settings.json').read_text())
+  except (OSError,ValueError):legacy={}
+  if not isinstance(legacy,dict):legacy={}
+  mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
+  mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('mode'),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
+  brightness=QSlider(Qt.Orientation.Horizontal);brightness.setRange(0,100);brightness.setValue(int(profile.get('brightness',100)));level=QLabel(str(brightness.value())+'%');brightness.valueChanged.connect(lambda v:level.setText(str(v)+'%'));form.addRow('Brightness',brightness);form.addRow('',level)
+  colors={}
+  for key,label,default in [('idle','Desktop',(244,120,215)),('scanning','Normal gameplay',(179,108,255)),('combat','Combat pulse',(240,24,134)),('manual','Manual colour',(244,120,215))]:
+   value=profile.get(key,default);colors[key]=QColor(*value);btn=QPushButton()
+   def paint_button(button,color):
+    button.setText(color.name().upper());button.setStyleSheet('background:'+color.name()+';color:'+('#19101f' if color.lightness()>135 else '#ffffff')+';padding:8px;border-radius:5px')
+   paint_button(btn,colors[key])
+   def choose(checked=False,k=key,b=btn):
+    c=QColorDialog.getColor(colors[k],dlg,'Choose Sakura colour')
+    if c.isValid():colors[k]=c;paint_button(b,c)
+   btn.clicked.connect(choose);form.addRow(label,btn)
+  checks={}
+  for key,label in [('keyboard','Keyboard'),('ram','Both RAM sticks'),('mouse','Harpoon mouse')]:
+   box=QCheckBox(label);box.setChecked(bool(profile.get(key,legacy.get('rgb_'+key,True))));checks[key]=box;layout.addWidget(box)
+  hint=QLabel('Automatic mode follows game detection. Manual mode overrides game lighting only. Brightness 0 turns selected LEDs black; Off releases control.');hint.setWordWrap(True);layout.addWidget(hint)
+  buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dlg.accept);buttons.rejected.connect(dlg.reject);layout.addWidget(buttons)
+  if dlg.exec()!=QDialog.DialogCode.Accepted:return
+  data=dict(mode=('auto','manual','off')[mode.currentIndex()],brightness=brightness.value())
+  data.update({k:[v.red(),v.green(),v.blue()] for k,v in colors.items()});data.update({k:v.isChecked() for k,v in checks.items()})
+  try:
+   self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
+  except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
+  if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def start_capture(self):
   source = os.getenv('SAKURA_SOURCE', 'sakura_bridge.monitor')
   self.capture.start('parec', ['--raw', '--format=s16le', f'--rate={RATE}',
@@ -82,9 +117,11 @@ class Dashboard(QWidget):
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
   if e.key()==Qt.Key_F2:self.open_sync_settings()
+  if e.key()==Qt.Key_F3:self.open_rgb_settings()
  def mousePressEvent(self,e):
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
-  if 70<=x<=1180 and 615<=y<=705:self.open_sync_settings()
+  if 1300<=x<=1850 and 90<=y<=145:self.open_rgb_settings()
+  elif 70<=x<=1180 and 615<=y<=705:self.open_sync_settings()
   super().mousePressEvent(e)
  def paintEvent(self,e):
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
@@ -104,6 +141,7 @@ class Dashboard(QWidget):
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
   text(70,95,1100,35,'GAME SYNC  /  '+mode+'  •  '+str(sync.get('playlist','Waiting')),17,accent)
+  p.setPen(Qt.NoPen);p.setBrush(QColor('#39253e'));p.drawRoundedRect(QRectF(1300,99,550,40),8,8);text(1320,99,510,40,'RGB CONTROL  /  F3',17,'#f478d7')
   text(70,615,1100,35,str(sync.get('scanner',self.sync_error or 'Waiting for Game Sync backend')),15,'#c393cc')
   text(70,650,1100,35,str(sync.get('rgb','RGB status unavailable'))+'  •  F2 / click for settings',15,'#a982b5')
   text(1300,640,530,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
