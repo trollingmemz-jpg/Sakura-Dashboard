@@ -130,7 +130,7 @@ class Dashboard(QWidget):
   p.setPen(Qt.NoPen)
   for i,(x,y,v) in enumerate(self.petals):
    p.setBrush(QColor(240,90,239,45));p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
-  text(70,40,900,55,'桜の夜  /  SAKURA NIGHT',23,'#f05aef',500);text(1510,32,380,90,time.strftime('%H:%M'),54);text(70,150,1100,45,'NOW PLAYING',17,'#c393cc');text(70,195,1100,90,self.track[0],47);text(70,285,1100,50,self.track[1],25,'#c393cc');
+  text(70,40,900,55,'桜の夜  /  SAKURA NIGHT',23,'#f05aef',500);text(1300,14,550,76,time.strftime('%H:%M'),46);text(70,150,1100,45,'NOW PLAYING',17,'#c393cc');text(70,195,1100,90,self.track[0],47);text(70,285,1100,50,self.track[1],25,'#c393cc');
   for i,b in enumerate(self.bars):
    h=max(3,min(1,b)*225);p.setBrush(QColor.fromHsvF(.79+i/80*.08,.55,.95));p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
   p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
