@@ -1,0 +1,42 @@
+name: Windows beta installer
+on:
+  push:
+    branches: [windows]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: trollingmemz-jpg/Sakura-Game-Sync
+          ref: windows
+          path: game_sync
+          token: ${{ secrets.SAKURA_BUILD_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-windows.txt
+      - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py game_sync
+      - name: Package application
+        run: python -m PyInstaller --noconfirm --windowed --onedir --name Sakura --add-data "game_sync;game_sync" --hidden-import adaptive --hidden-import rgb_sync --hidden-import cv2 --hidden-import PIL.ImageGrab --hidden-import soundcard --collect-all soundcard --collect-submodules openrgb --paths game_sync windows_entry.py
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/Sakura/Sakura.exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+      - name: Install installer compiler
+        run: choco install innosetup --yes --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" Sakura.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sakura-Windows-Beta
+          path: installer/Sakura-Windows-Beta.exe
+          if-no-files-found: error
