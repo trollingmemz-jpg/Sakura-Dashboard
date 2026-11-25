@@ -29,6 +29,38 @@ class Connect:
     finally:
      if os.path.exists(path):os.unlink(path)
    return token['access_token']
+ def login(self,client):
+  import secrets,hashlib,base64,http.server,webbrowser,fcntl
+  client=client.strip()
+  if not client:raise ValueError('Enter your Spotify developer client ID.')
+  verifier=secrets.token_urlsafe(64);state=secrets.token_urlsafe(24);challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
+  redirect='http://127.0.0.1:8700/callback';result={}
+  class Handler(http.server.BaseHTTPRequestHandler):
+   def do_GET(self):
+    url=urllib.parse.urlsplit(self.path);q=urllib.parse.parse_qs(url.query)
+    if url.path!='/callback' or q.get('state',[''])[0]!=state:self.send_error(400);return
+    result.update(q);self.send_response(200);self.end_headers();self.wfile.write(b'Return to Sakura.')
+   def log_message(self,*args):pass
+  with http.server.HTTPServer(('127.0.0.1',8700),Handler) as server:
+   server.timeout=1
+   webbrowser.open('https://accounts.spotify.com/authorize?'+urllib.parse.urlencode(dict(client_id=client,response_type='code',redirect_uri=redirect,code_challenge_method='S256',code_challenge=challenge,state=state,scope='user-read-playback-state user-modify-playback-state user-read-currently-playing')))
+   deadline=time.monotonic()+180
+   while not result and not self.closed and time.monotonic()<deadline:server.handle_request()
+  if 'code' not in result:raise RuntimeError('Spotify sign-in cancelled or timed out.')
+  req=urllib.request.Request('https://accounts.spotify.com/api/token',data=urllib.parse.urlencode(dict(client_id=client,grant_type='authorization_code',code=result['code'][0],redirect_uri=redirect,code_verifier=verifier)).encode())
+  with urllib.request.urlopen(req,timeout=12) as r:token=json.load(r)
+  token['expires_at']=time.time()+token['expires_in']
+  self.root.mkdir(parents=True,exist_ok=True)
+  with open(self.root/'spotify-token.lock','a') as guard:
+   fcntl.flock(guard,fcntl.LOCK_EX)
+   cfg=self.read('settings.json');cfg['client']=client
+   for name,data in [('token.json',token),('settings.json',cfg)]:
+    fd,path=tempfile.mkstemp(dir=self.root,prefix='sakura-auth-')
+    try:
+     with os.fdopen(fd,'w') as f:json.dump(data,f)
+     os.replace(path,self.root/name)
+    finally:
+     if os.path.exists(path):os.unlink(path)
  def call(self,path,method='GET',body=None):
   req=urllib.request.Request('https://api.spotify.com/v1/me/player'+path,method=method,headers={'Authorization':'Bearer '+self.token(),'Content-Type':'application/json'},data=json.dumps(body).encode() if body is not None else None)
   try:
@@ -56,7 +88,8 @@ class Connect:
    error=''
    try:
     if time.monotonic()<self.backoff:raise RuntimeError('Spotify rate limit: retry shortly.')
-    if action=='transfer':self.call('','PUT',{'device_ids':[str(data['device'])],'play':True})
+    if action=='login':self.login(data['client'])
+    elif action=='transfer':self.call('','PUT',{'device_ids':[str(data['device'])],'play':True})
     elif action in ('play','pause'):self.call('/'+action,'PUT')
     elif action in ('next','previous'):self.call('/'+action,'POST')
     elif action=='volume':self.call('/volume?volume_percent='+str(max(0,min(100,int(data['value'])))),'PUT')
