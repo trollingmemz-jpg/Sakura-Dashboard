@@ -17,12 +17,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements-windows.txt
-      - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py windows_media.py windows_update.py game_sync
+      - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py windows_media.py windows_update.py feature_panels.py discord_connection.py responsive_layout.py game_sync
       - name: Stamp build version
         shell: pwsh
         run: Set-Content -Path build-id.txt -Value '${{ github.run_id }}' -Encoding ascii
       - name: Package application
-        run: python -m PyInstaller --noconfirm --windowed --onedir --name Sakura --add-data "game_sync;game_sync" --add-data "build-id.txt;." --collect-submodules winrt --hidden-import windows_games --hidden-import adaptive --hidden-import rgb_sync --hidden-import cv2 --hidden-import PIL.ImageGrab --hidden-import soundcard --collect-all soundcard --collect-submodules openrgb --paths game_sync windows_entry.py
+        run: python -m PyInstaller --noconfirm --windowed --onedir --name Sakura --add-data "game_sync;game_sync" --add-data "build-id.txt;." --collect-submodules winrt --collect-submodules discord --hidden-import windows_games --hidden-import adaptive --hidden-import rgb_sync --hidden-import cv2 --hidden-import PIL.ImageGrab --hidden-import soundcard --collect-all soundcard --collect-submodules openrgb --paths game_sync windows_entry.py
       - name: Smoke test
         shell: pwsh
         run: |
