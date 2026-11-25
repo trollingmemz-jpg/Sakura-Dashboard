@@ -45,11 +45,11 @@ class Dashboard(QWidget):
   if self.sync_status or self.sync_started:return
   root=Path(__file__).resolve().parent/'game_sync'
   python=Path(sys.executable); entry=root/'app.py'
-  if getattr(sys,'frozen',False):root=Path(sys.executable).resolve().parent;python=root/'SakuraGameSync.exe';entry=python
+  if getattr(sys,'frozen',False):root=Path(sys.executable).resolve().parent;python=Path(sys.executable);entry=python
   if not python.is_file() or not entry.is_file():
    self.sync_error='Game Sync installation not found';return
   try:
-   subprocess.Popen(([str(python),'--background'] if getattr(sys,'frozen',False) else [str(python),str(entry),'--background']),cwd=root,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   subprocess.Popen(([str(python),'--game-sync','--background'] if getattr(sys,'frozen',False) else [str(python),str(entry),'--background']),cwd=root,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    self.sync_started=True
   except OSError as e:self.sync_error=str(e)
  def open_sync_settings(self):
@@ -270,6 +270,9 @@ class Dashboard(QWidget):
 
  def closeEvent(self, event):
   self.connect.closed=True;self.win_audio.closed=True
+  if self.sync_status:
+   try:self.write_setting('dashboard-advanced.request',dict(action='quit'))
+   except OSError:pass
   self.sync_timer.stop()
   self.audio_timer.stop()
   if self.capture.state() != QProcess.NotRunning:
@@ -345,4 +348,9 @@ class Dashboard(QWidget):
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
-app=QApplication(sys.argv);w=Dashboard();w.show();sys.exit(app.exec())
+app=QApplication(sys.argv)
+from PySide6.QtCore import QLockFile
+state=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';state.mkdir(parents=True,exist_ok=True)
+lock=QLockFile(str(state/'dashboard.lock'));lock.setStaleLockTime(0)
+if not lock.tryLock(0):sys.exit(0)
+w=Dashboard();w.show();sys.exit(app.exec())
