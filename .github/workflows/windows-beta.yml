@@ -4,19 +4,12 @@ on:
     branches: [windows]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   package:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: trollingmemz-jpg/Sakura-Game-Sync
-          ref: windows
-          path: game_sync
-          persist-credentials: false
-          token: ${{ github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -41,3 +34,11 @@ jobs:
           name: Sakura-Windows-Beta
           path: installer/Sakura-Windows-Beta.exe
           if-no-files-found: error
+      - name: Publish beta installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "windows-beta-${{ github.run_id }}"
+          gh release create $tag installer/Sakura-Windows-Beta.exe --target "${{ github.sha }}" --title "Sakura Windows Beta" --notes "Experimental Windows build with Dashboard and Game Sync bundled." --prerelease
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
