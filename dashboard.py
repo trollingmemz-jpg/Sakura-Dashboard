@@ -7,6 +7,9 @@ from PySide6.QtCore import QProcess
 import psutil
 import urllib.request
 from bloom import Bloom
+from inline_panel import InlinePanel
+from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
+from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
 from PySide6.QtCore import QPointF
 from local_spectrum import LiveSpectrum, RATE
@@ -14,7 +17,7 @@ class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
-  self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[]
+  self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
@@ -45,25 +48,60 @@ class Dashboard(QWidget):
    self.sync_started=True
   except OSError as e:self.sync_error=str(e)
  def open_sync_settings(self):
-  if not self.sync_status:
-   self.sync_started=False;self.ensure_sync()
-   return
-  try:
-   self.sync_root.mkdir(parents=True,exist_ok=True)
-   (self.sync_root/'dashboard-show.request').write_text('')
-  except OSError as e:self.sync_error=str(e)
+  dlg=InlinePanel(self);dlg.setWindowTitle('Advanced settings');layout=QVBoxLayout(dlg)
+  try:cfg=json.loads((self.sync_root/'settings.json').read_text())
+  except (OSError,ValueError):cfg={}
+  client=QLineEdit(str(cfg.get('client','')));client.setPlaceholderText('Spotify developer client ID');layout.addWidget(client)
+  def request(action,**data):
+   try:self.write_setting('dashboard-advanced.request',dict(action=action,**data));status.setText('Request queued: '+action)
+   except OSError as e:status.setText(str(e))
+  login=QPushButton('Connect Spotify');login.clicked.connect(lambda:request('login',client=client.text()));layout.addWidget(login)
+  table=QTableWidget(0,4);table.setHorizontalHeaderLabels(['Game','Steam ID','Process match','Playlist']);table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch);layout.addWidget(table)
+  try:rows=json.loads((self.sync_root/'games.json').read_text())
+  except (OSError,ValueError):rows=[]
+  def add(row):
+   i=table.rowCount();table.insertRow(i)
+   for j,value in enumerate(row):table.setItem(i,j,QTableWidgetItem(str(value)))
+  for row in rows:add(row)
+  for label,fn in [('Add game',lambda:add(['New game','','',''])),('Remove selected game',lambda:table.removeRow(table.currentRow()) if table.currentRow()>=0 else None),('Save game mappings',lambda:request('mappings',rows=[[table.item(i,j).text() if table.item(i,j) else '' for j in range(4)] for i in range(table.rowCount())])),('Start scanner',lambda:request('start')),('Stop scanner',lambda:request('stop')),('Install vision dependencies',lambda:request('dependencies'))]:
+   button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
+  def images():
+   paths,_=QFileDialog.getOpenFileNames(self,'Select mech references',str(Path.home()),'Images (*.png *.jpg *.jpeg *.webp)')
+   if paths:request('images',paths=paths)
+  def archive():
+   path,_=QFileDialog.getOpenFileName(self,'Select blueprint archive',str(Path.home()),'Archives (*.tar.gz *.tgz *.tar)')
+   if path:request('archive',path=path)
+  for label,fn in [('Import reference images',images),('Import blueprint archive',archive)]:
+   button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
+  status=QLabel('');status.setWordWrap(True);layout.addWidget(status)
+  dlg.exec()
  def bloom_menu(self):
-  choice=Bloom(self,self.accent).exec()-2
+  if self.panel_active:return
+  self.panel_active=True
+  try:choice=Bloom(self,self.accent).exec()-2
+  finally:self.panel_active=False
   if choice==0:self.open_settings(1)
   elif choice==1:self.open_settings(0)
   elif choice==2:self.open_player()
   elif choice==3:self.open_settings(2)
-  elif choice==4:QMessageBox.information(self,'Sakura • System','Automatic updates on launch\n'+str(self.sync_status.get('scanner','Backend unavailable'))+'\n'+str(self.sync_status.get('spotify',''))+'\n'+self.audio_status)
+  elif choice==4:self.open_system()
+ def open_system(self):
+  dlg=InlinePanel(self);dlg.setWindowTitle('System');layout=QVBoxLayout(dlg)
+  for value in ('Automatic updates on launch',self.sync_status.get('scanner','Backend unavailable'),self.sync_status.get('spotify',''),self.audio_status):
+   label=QLabel(str(value));label.setWordWrap(True);layout.addWidget(label)
+  dlg.exec()
+ def playing(self):
+  if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
+  return bool(self.player.get('is_playing'))
  def command(self,action,**data):
+  if action in ('play','pause','previous','next') and self.spotify_target and self.local_playing is not None:
+   subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   if action in ('play','pause'):self.local_playing=action=='play'
+   return
   try:self.write_setting('dashboard-player.request',dict(time=time.time(),action=action,**data))
   except OSError as e:QMessageBox.warning(self,'Spotify',str(e))
  def open_player(self):
-  dlg=QDialog(self);dlg.setWindowTitle('Sakura • Spotify');dlg.setMinimumWidth(420);layout=QFormLayout(dlg)
+  dlg=InlinePanel(self);dlg.setWindowTitle('Sakura • Spotify');dlg.setMinimumWidth(420);layout=QFormLayout(dlg)
   devices=QComboBox();available=[d for d in self.devices if d.get('id') and not d.get('is_restricted')]
   for d in available:devices.addItem(d.get('name','Device')+(' • active' if d.get('is_active') else ''),d['id'])
   for i,d in enumerate(available):
@@ -73,15 +111,22 @@ class Dashboard(QWidget):
   playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist);play=QPushButton('Play playlist');play.clicked.connect(lambda:(self.command('playlist',value=playlist.text()),dlg.accept()));layout.addRow(play)
   shuffle=QPushButton('Toggle shuffle');shuffle.clicked.connect(lambda:(self.command('shuffle',value=not self.player.get('shuffle_state',False)),dlg.accept()));layout.addRow(shuffle)
   repeat=QComboBox();repeat.addItems(['off','context','track']);repeat.setCurrentText(self.player.get('repeat_state','off'));repeat.activated.connect(lambda _:self.command('repeat',value=repeat.currentText()));layout.addRow('Repeat',repeat)
-  account=QPushButton('Account and advanced settings');account.clicked.connect(lambda:(dlg.reject(),self.open_sync_settings()));layout.addRow(account)
-  close=QPushButton('Close');close.clicked.connect(dlg.accept);layout.addRow(close);dlg.exec()
+  account=QPushButton('Account and advanced settings');account.clicked.connect(lambda:dlg.done(2));layout.addRow(account)
+  close=QPushButton('Close');close.clicked.connect(dlg.accept);layout.addRow(close)
+  if dlg.exec()==2:self.open_sync_settings()
  def poll_player(self):
   try:
-   state=json.loads((self.sync_root/'dashboard-player.json').read_text())
-   if abs(time.time()-state['time'])>45:return
-   self.player=state.get('player') or {};self.devices=state.get('devices',[])
-   item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[-1].get('url','') if images else ''
-   if url and url!=self.art_url and url.startswith('https://'):
+   try:state=json.loads((self.sync_root/'dashboard-player.json').read_text())
+   except (OSError,ValueError):state={}
+   if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
+   else:self.player={};self.devices=[]
+   item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
+   try:
+    local_url=subprocess.check_output(['playerctl','--player=spotify','metadata','mpris:artUrl'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
+    if local_url and (self.spotify_target or not url):url=local_url
+   except (OSError,subprocess.SubprocessError):pass
+   if url.startswith('https://open.spotify.com/image/'):url=url.replace('https://open.spotify.com/image/','https://i.scdn.co/image/',1)
+   if url and url!=self.art_url and url.startswith(('https://','http://','file://')):
     with urllib.request.urlopen(url,timeout=4) as response:raw=response.read(4000000)
     image=QImage.fromData(raw)
     if not image.isNull():
@@ -91,7 +136,7 @@ class Dashboard(QWidget):
  def open_rgb_settings(self):
   self.open_settings(1)
  def open_settings(self,index=0):
-  dlg=QDialog(self);dlg.setWindowTitle('Sakura • Settings');dlg.setMinimumWidth(560)
+  dlg=InlinePanel(self);dlg.setWindowTitle('Sakura • Settings');dlg.setMinimumWidth(560)
   dlg.setStyleSheet('QDialog{background:#201329;color:#f5d9ef} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox{background:#39253e;color:#f5d9ef;padding:8px;border-radius:5px}')
   outer=QVBoxLayout(dlg);tabs=QTabWidget();outer.addWidget(tabs)
   general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
@@ -107,11 +152,11 @@ class Dashboard(QWidget):
   for key,label,default in [('enabled','Automatic soundtrack switching',False),('shuffle','Shuffle playlists',True),('fallback','Desktop playlist on game exit',True),('adaptive','Automatic Trailmakers scanning',False),('hud_enabled','Combat overlay',True)]:
    box=QCheckBox();box.setChecked(bool(legacy.get(key,default)));controls[key]=box;g.addRow(label,box)
   combat=QLineEdit(str(legacy.get('combat','')));g.addRow('Combat playlist',combat)
-  device=QLineEdit(str(legacy.get('device','')));device.setPlaceholderText('Blank = active Spotify device');g.addRow('Playback device',device)
+  device=QComboBox();device.setEditable(True);device.addItem('');device.addItems([d.get('name','') for d in self.devices if d.get('name')]);device.setCurrentText(str(legacy.get('device','')));g.addRow('Playback device (blank = active)',device)
   threshold=QSpinBox();threshold.setRange(8,100);threshold.setValue(int(legacy.get('threshold',12)));g.addRow('Matching threshold',threshold)
   advanced=QPushButton('Advanced: game mappings, Spotify sign-in and mech references')
   g.addRow(advanced)
-  advanced.clicked.connect(lambda:(dlg.reject(),self.open_sync_settings()))
+  advanced.clicked.connect(lambda:dlg.done(2))
   try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
   except (OSError,ValueError):view={}
   if not isinstance(view,dict):view={}
@@ -130,20 +175,29 @@ class Dashboard(QWidget):
     button.setText(color.name().upper());button.setStyleSheet('background:'+color.name()+';color:'+('#19101f' if color.lightness()>135 else '#ffffff')+';padding:8px;border-radius:5px')
    paint_button(btn,colors[key])
    def choose(checked=False,k=key,b=btn):
-    c=QColorDialog.getColor(colors[k],dlg,'Choose Sakura colour')
-    if c.isValid():colors[k]=c;paint_button(b,c)
+    picker=InlinePanel(self);picker.setWindowTitle('Choose Sakura colour');f=QFormLayout(picker);channels=[]
+    for label,value in zip(('Red','Green','Blue'),colors[k].getRgb()[:3]):
+     spin=QSpinBox();spin.setRange(0,255);spin.setValue(value);f.addRow(label,spin);channels.append(spin)
+    hexfield=QLineEdit(colors[k].name());f.addRow('Hex colour',hexfield)
+    for spin in channels:spin.valueChanged.connect(lambda _:hexfield.setText(QColor(*(v.value() for v in channels)).name()))
+    ok=QPushButton('Apply');ok.clicked.connect(picker.accept);f.addRow(ok)
+    if picker.exec()==1:
+     c=QColor(hexfield.text());
+     if c.isValid():colors[k]=c;paint_button(b,c)
    btn.clicked.connect(choose);form.addRow(label,btn)
   checks={}
   for key,label in [('keyboard','Keyboard'),('ram','Both RAM sticks'),('mouse','Harpoon mouse')]:
    box=QCheckBox(label);box.setChecked(bool(profile.get(key,legacy.get('rgb_'+key,True))));checks[key]=box;layout.addWidget(box)
   hint=QLabel('Automatic mode follows game detection. Manual mode overrides game lighting only. Brightness 0 turns selected LEDs black; Off releases control.');hint.setWordWrap(True);layout.addWidget(hint)
   buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dlg.accept);buttons.rejected.connect(dlg.reject);outer.addWidget(buttons)
-  if dlg.exec()!=QDialog.DialogCode.Accepted:return
+  result=dlg.exec()
+  if result==2:self.open_sync_settings();return
+  if result!=QDialog.DialogCode.Accepted:return
   data=dict(mode=('auto','manual','off')[mode.currentIndex()],brightness=brightness.value())
   data.update({k:[v.red(),v.green(),v.blue()] for k,v in colors.items()});data.update({k:v.isChecked() for k,v in checks.items()})
   try:
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
-   game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.text().strip(),threshold=threshold.value())
+   game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
    self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
@@ -218,6 +272,8 @@ class Dashboard(QWidget):
   while True:
    self.spotify_target=self.discover_spotify()
    self.poll_player()
+   try:self.local_playing=subprocess.check_output(['playerctl','--player=spotify','status'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()=='Playing'
+   except (OSError,subprocess.SubprocessError):self.local_playing=None
    def cmd(a):
     try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
     except Exception:return ''
@@ -232,7 +288,7 @@ class Dashboard(QWidget):
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
   elif math.hypot(x-1830,y-655)<45:self.bloom_menu()
   elif 300<=x<=370 and 330<=y<=390:self.command('previous')
-  elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.player.get('is_playing') else 'play')
+  elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.playing() else 'play')
   elif 460<=x<=530 and 330<=y<=390:self.command('next')
   elif 550<=x<=1180 and 330<=y<=390:self.open_player()
   super().mousePressEvent(e)
@@ -256,7 +312,13 @@ class Dashboard(QWidget):
   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
   item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
   text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
-  text(310,330,60,60,'‹',30);text(390,330,60,60,'Ⅱ' if self.player.get('is_playing') else '▶',23);text(470,330,60,60,'›',30)
+  p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
+  for x,direction in ((335,-1),(495,1)):
+   path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
+  if self.playing():
+   p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
+  else:
+   path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
   for i,b in enumerate(self.bars):
    h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
