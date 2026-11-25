@@ -51,13 +51,11 @@ class Dashboard(QWidget):
   except OSError as e:self.sync_error=str(e)
  def open_sync_settings(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Advanced settings');layout=QVBoxLayout(dlg)
-  try:cfg=json.loads((self.sync_root/'settings.json').read_text())
-  except (OSError,ValueError):cfg={}
-  client=QLineEdit(str(cfg.get('client','')));client.setPlaceholderText('Spotify developer client ID');layout.addWidget(client)
   def request(action,**data):
-   try:self.write_setting('dashboard-advanced.request',dict(action=action,**data));status.setText('Request queued: '+action)
+   try:
+    if not self.sync_status:self.sync_started=False;self.ensure_sync()
+    self.write_setting('dashboard-advanced.request',dict(action=action,**data));status.setText('Request queued: '+action)
    except OSError as e:status.setText(str(e))
-  login=QPushButton('Connect Spotify');login.clicked.connect(lambda:request('login',client=client.text()));layout.addWidget(login)
   table=QTableWidget(0,4);table.setHorizontalHeaderLabels(['Game','Steam ID','Process match','Playlist']);table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch);layout.addWidget(table)
   try:rows=json.loads((self.sync_root/'games.json').read_text())
   except (OSError,ValueError):rows=[]
@@ -88,10 +86,42 @@ class Dashboard(QWidget):
   elif choice==3:self.open_settings(2)
   elif choice==4:self.open_system()
  def open_system(self):
-  dlg=InlinePanel(self);dlg.setWindowTitle('System');layout=QVBoxLayout(dlg)
-  for value in ('Automatic updates on launch',self.sync_status.get('scanner','Backend unavailable'),self.sync_status.get('spotify',''),self.audio_status):
-   label=QLabel(str(value));label.setWordWrap(True);layout.addWidget(label)
-  dlg.exec()
+  dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
+  info=QLabel();info.setWordWrap(True);layout.addWidget(info)
+  log=QLabel();log.setWordWrap(True);layout.addWidget(log)
+  state=Path(os.environ.get('XDG_STATE_HOME',str(Path.home()/'.local/state')))/'sakura'
+  def update():
+   info.setText('Game Sync: '+('Running' if self.sync_status else 'Offline')+'\nSpotify: '+(self.connect.state.get('device_error') or ('Connected' if self.connect.state.get('time') else 'Connecting'))+'\n'+self.audio_status+'\n'+str(self.sync_status.get('scanner','Scanner offline'))+'\n'+str(self.sync_status.get('rgb','Lighting offline')))
+  def restart():
+   if self.sync_status:self.write_setting('dashboard-restart.request',{})
+   else:self.sync_started=False;self.ensure_sync()
+   log.setText('Game Sync restart requested.')
+  def logs():
+   try:log.setText('\n'.join((state/'update.log').read_text().splitlines()[-12:]))
+   except OSError:log.setText('No update log available.')
+  def relaunch():
+   try:
+    subprocess.Popen(['bash',str(Path(__file__).resolve().parent/'run.sh')],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    dlg.accept();self.close()
+   except OSError as e:log.setText(str(e))
+  for label,fn in [('Restart Game Sync',restart),('Check for updates and relaunch',relaunch),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+   button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();dlg.exec();timer.stop()
+ def open_account(self):
+  dlg=InlinePanel(self);dlg.setWindowTitle('Spotify account');layout=QFormLayout(dlg)
+  client=QLineEdit(str(self.connect.read('settings.json').get('client','')));layout.addRow('Spotify client ID',client)
+  hint=QLabel('Use your Spotify developer application with redirect URI http://127.0.0.1:8700/callback. Authorisation opens in your browser.');hint.setWordWrap(True);layout.addRow(hint)
+  link=QPushButton('Open Spotify developer dashboard');link.clicked.connect(lambda:__import__('webbrowser').open('https://developer.spotify.com/dashboard'));layout.addRow(link)
+  status=QLabel('Spotify account connected' if self.connect.read('token.json').get('refresh_token') else 'Not connected');status.setWordWrap(True);layout.addRow(status)
+  pending=[0.]
+  def login():
+   pending[0]=time.time();button.setEnabled(False);status.setText('Complete sign-in in your browser.');self.connect.submit('login',client=client.text())
+  def update():
+   result=self.connect.result
+   if pending[0] and result.get('action')=='login' and result.get('time',0)>=pending[0]:
+    pending[0]=0.;button.setEnabled(True);status.setText(result.get('error') or 'Spotify connected successfully.')
+  button=QPushButton('Connect Spotify');button.clicked.connect(login);layout.addRow(button)
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);dlg.exec();timer.stop()
  def playing(self):
   if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
   return bool(self.player.get('is_playing'))
@@ -139,7 +169,7 @@ class Dashboard(QWidget):
   repeat.activated.connect(lambda _:send('repeat',value=repeat.currentText()))
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update();send('refresh')
   result=dlg.exec();timer.stop()
-  if result==2:self.open_sync_settings()
+  if result==2:self.open_account()
  def poll_player(self):
   try:
    state=self.connect.state
@@ -179,7 +209,7 @@ class Dashboard(QWidget):
   combat=QLineEdit(str(legacy.get('combat','')));g.addRow('Combat playlist',combat)
   device=QComboBox();device.setEditable(True);device.addItem('');device.addItems([d.get('name','') for d in self.devices if d.get('name')]);device.setCurrentText(str(legacy.get('device','')));g.addRow('Playback device (blank = active)',device)
   threshold=QSpinBox();threshold.setRange(8,100);threshold.setValue(int(legacy.get('threshold',12)));g.addRow('Matching threshold',threshold)
-  advanced=QPushButton('Advanced: game mappings, Spotify sign-in and mech references')
+  advanced=QPushButton('Advanced: game mappings and mech references')
   g.addRow(advanced)
   advanced.clicked.connect(lambda:dlg.done(2))
   try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
@@ -305,11 +335,13 @@ class Dashboard(QWidget):
     except Exception:return ''
    gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','--player=spotify','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
  def keyPressEvent(self,e):
+  if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
   if e.key()==Qt.Key_F2:self.bloom_menu()
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
  def mousePressEvent(self,e):
+  if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
   elif math.hypot(x-1830,y-655)<45:self.bloom_menu()
