@@ -229,19 +229,37 @@ class Dashboard(QWidget):
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
  def mousePressEvent(self,e):
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
-  if 1300<=x<=1850 and 90<=y<=145:self.open_settings()
-  elif 70<=x<=1180 and 615<=y<=705:self.open_settings()
+  if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
+  elif math.hypot(x-1830,y-655)<45:self.bloom_menu()
+  elif 300<=x<=370 and 330<=y<=390:self.command('previous')
+  elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.player.get('is_playing') else 'play')
+  elif 460<=x<=530 and 330<=y<=390:self.command('next')
+  elif 550<=x<=1180 and 330<=y<=390:self.open_player()
   super().mousePressEvent(e)
+ def mouseMoveEvent(self,e):
+  if self.circle_points:self.circle_points.append((e.position().x()*1920/max(1,self.width()),e.position().y()*720/max(1,self.height())))
+ def mouseReleaseEvent(self,e):
+  pts=self.circle_points;self.circle_points=[]
+  if len(pts)<12:return
+  cx=sum(x for x,y in pts)/len(pts);cy=sum(y for x,y in pts)/len(pts);r=[math.hypot(x-cx,y-cy) for x,y in pts];avg=sum(r)/len(r)
+  angles=[math.atan2(y-cy,x-cx) for x,y in pts];travel=sum(math.atan2(math.sin(b-a),math.cos(b-a)) for a,b in zip(angles,angles[1:]))
+  if 65<avg<280 and abs(travel)>5.35 and max(r)-min(r)<avg*.85 and math.dist(pts[0],pts[-1])<avg*.5:self.bloom_menu()
  def paintEvent(self,e):
-  p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
+  p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); target=self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7');self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
    p.setPen(QColor(color));f=QFont('Sans Serif',size);f.setWeight(QFont.Weight(weight));p.setFont(f);p.drawText(QRectF(x,y,w,h),Qt.AlignVCenter|Qt.AlignLeft,p.fontMetrics().elidedText(str(s),Qt.ElideRight,int(w)))
   p.setPen(Qt.NoPen)
   for i,(x,y,v) in enumerate(self.petals if self.display_options.get('petals',True) else []):
    p.setBrush(QColor(240,90,239,45));p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
-  text(70,40,900,55,'桜の夜  /  SAKURA NIGHT',23,'#f05aef',500);text(1300,14,550,76,time.strftime('%H:%M'),46);text(70,150,1100,45,'NOW PLAYING',17,'#c393cc');text(70,195,1100,90,self.track[0],47);text(70,285,1100,50,self.track[1],25,'#c393cc');
+  text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500);text(1300,14,550,76,time.strftime('%H:%M'),46)
+  if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
+  else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
+  item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
+  text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
+  text(310,330,60,60,'‹',30);text(390,330,60,60,'Ⅱ' if self.player.get('is_playing') else '▶',23);text(470,330,60,60,'›',30)
+  text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
   for i,b in enumerate(self.bars):
-   h=max(3,min(1,b)*225);p.setBrush(QColor.fromHsvF(.79+i/80*.08,.55,.95));p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
+   h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
   p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
   for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
    y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
@@ -249,10 +267,11 @@ class Dashboard(QWidget):
   sync=self.sync_status
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
-  text(70,95,1100,35,'GAME SYNC  /  '+mode+'  •  '+str(sync.get('playlist','Waiting')),17,accent)
-  p.setPen(Qt.NoPen);p.setBrush(QColor('#39253e'));p.drawRoundedRect(QRectF(1300,99,550,40),8,8);text(1320,99,510,40,'SETTINGS  /  F2',17,'#f478d7')
-  text(70,335,1100,32,self.audio_status,14,'#a982b5')
-  text(70,615,1100,35,str(sync.get('scanner',self.sync_error or 'Waiting for Game Sync backend')),15,'#c393cc')
-  text(70,650,1100,35,str(sync.get('rgb','RGB status unavailable'))+'  •  F2 / click for settings',15,'#a982b5')
-  text(1300,640,530,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
+  text(70,645,1100,35,'Sakura active' if sync else 'Game Sync offline',15,'#a982b5')
+  text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
+  p.setPen(QPen(self.accent,1.3));p.setBrush(QColor('#211329'));p.drawEllipse(QPointF(1830,655),36,36)
+  text(1808,624,60,62,'桜',25,self.accent)
+  if self.circle_points:
+   p.setPen(QPen(self.accent,2))
+   for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
 app=QApplication(sys.argv);w=Dashboard();w.show();sys.exit(app.exec())
