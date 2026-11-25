@@ -101,19 +101,46 @@ class Dashboard(QWidget):
   try:self.write_setting('dashboard-player.request',dict(time=time.time(),action=action,**data))
   except OSError as e:QMessageBox.warning(self,'Spotify',str(e))
  def open_player(self):
-  dlg=InlinePanel(self);dlg.setWindowTitle('Sakura • Spotify');dlg.setMinimumWidth(420);layout=QFormLayout(dlg)
-  devices=QComboBox();available=[d for d in self.devices if d.get('id') and not d.get('is_restricted')]
-  for d in available:devices.addItem(d.get('name','Device')+(' • active' if d.get('is_active') else ''),d['id'])
-  for i,d in enumerate(available):
-   if d.get('is_active'):devices.setCurrentIndex(i)
-  layout.addRow('Spotify Connect',devices);transfer=QPushButton('Transfer playback');transfer.setEnabled(bool(available));transfer.clicked.connect(lambda:(self.command('transfer',device=devices.currentData()),dlg.accept()));layout.addRow(transfer)
-  volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(int((self.player.get('device') or {}).get('volume_percent') or 0));layout.addRow('Volume',volume);volume.sliderReleased.connect(lambda:self.command('volume',value=volume.value()))
-  playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist);play=QPushButton('Play playlist');play.clicked.connect(lambda:(self.command('playlist',value=playlist.text()),dlg.accept()));layout.addRow(play)
-  shuffle=QPushButton('Toggle shuffle');shuffle.clicked.connect(lambda:(self.command('shuffle',value=not self.player.get('shuffle_state',False)),dlg.accept()));layout.addRow(shuffle)
-  repeat=QComboBox();repeat.addItems(['off','context','track']);repeat.setCurrentText(self.player.get('repeat_state','off'));repeat.activated.connect(lambda _:self.command('repeat',value=repeat.currentText()));layout.addRow('Repeat',repeat)
-  account=QPushButton('Account and advanced settings');account.clicked.connect(lambda:dlg.done(2));layout.addRow(account)
-  close=QPushButton('Close');close.clicked.connect(dlg.accept);layout.addRow(close)
-  if dlg.exec()==2:self.open_sync_settings()
+  dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
+  status=QLabel('Discovering Spotify Connect devices…');status.setWordWrap(True);layout.addRow(status)
+  devices=QComboBox();layout.addRow('Playback device',devices)
+  transfer=QPushButton('Transfer playback');transfer.setEnabled(False);layout.addRow(transfer)
+  refresh=QPushButton('Refresh devices');layout.addRow(refresh)
+  volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(int((self.player.get('device') or {}).get('volume_percent') or 0));layout.addRow('Volume',volume)
+  playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist)
+  play=QPushButton('Play playlist');layout.addRow(play)
+  shuffle=QCheckBox('Shuffle');shuffle.setChecked(bool(self.player.get('shuffle_state',False)));layout.addRow(shuffle)
+  repeat=QComboBox();repeat.addItems(['off','context','track']);repeat.setCurrentText(self.player.get('repeat_state','off'));layout.addRow('Repeat',repeat)
+  account=QPushButton('Spotify account settings');account.clicked.connect(lambda:dlg.done(2));layout.addRow(account)
+  pending=[0.];seen=[None]
+  def send(action,**data):
+   pending[0]=time.time();status.setText('Requesting '+action+'…');self.command(action,**data)
+  def update():
+   try:state=json.loads((self.sync_root/'dashboard-player.json').read_text())
+   except (OSError,ValueError):state={}
+   if state.get('time',0)!=seen[0]:
+    seen[0]=state.get('time',0);old=devices.currentData();devices.clear()
+    available=[d for d in state.get('devices',[]) if d.get('id') and not d.get('is_restricted')]
+    for d in available:devices.addItem(d.get('name','Device')+(' • active' if d.get('is_active') else ''),d['id'])
+    for i,d in enumerate(available):
+     if d['id']==old or (not old and d.get('is_active')):devices.setCurrentIndex(i)
+    transfer.setEnabled(bool(available))
+    if not pending[0]:status.setText(state.get('device_error') or (str(len(available))+' available devices' if available else 'No devices found. Open Spotify on the target device.'))
+   try:result=json.loads((self.sync_root/'dashboard-player-result.json').read_text())
+   except (OSError,ValueError):result={}
+   if pending[0] and result.get('time',0)>=pending[0]:
+    pending[0]=0.;status.setText(result.get('error') or (str(devices.count())+' available devices' if result.get('action')=='refresh' else 'Spotify request completed'))
+   elif pending[0] and time.time()-pending[0]>30:
+    pending[0]=0.;status.setText('Backend did not respond. Check Game Sync is running and Spotify is connected.')
+  transfer.clicked.connect(lambda:send('transfer',device=devices.currentData()) if devices.currentData() else None)
+  refresh.clicked.connect(lambda:send('refresh'))
+  volume.sliderReleased.connect(lambda:send('volume',value=volume.value()))
+  play.clicked.connect(lambda:send('playlist',value=playlist.text()))
+  shuffle.toggled.connect(lambda value:send('shuffle',value=value))
+  repeat.activated.connect(lambda _:send('repeat',value=repeat.currentText()))
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update();send('refresh')
+  result=dlg.exec();timer.stop()
+  if result==2:self.open_sync_settings()
  def poll_player(self):
   try:
    try:state=json.loads((self.sync_root/'dashboard-player.json').read_text())
