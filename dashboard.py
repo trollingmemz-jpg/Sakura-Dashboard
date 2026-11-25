@@ -2,7 +2,7 @@ import sys, math, random, time, subprocess, threading, os, glob, json
 from pathlib import Path
 from PySide6.QtCore import Qt,QTimer,QRectF
 from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
-from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayout,QComboBox,QSlider,QCheckBox,QPushButton,QColorDialog,QDialogButtonBox,QLabel,QMessageBox
+from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayout,QComboBox,QSlider,QCheckBox,QPushButton,QColorDialog,QDialogButtonBox,QLabel,QMessageBox,QTabWidget,QLineEdit,QSpinBox
 from PySide6.QtCore import QProcess
 import psutil
 from local_spectrum import LiveSpectrum, RATE
@@ -21,6 +21,7 @@ class Dashboard(QWidget):
   self.timer = QTimer(self)
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
+  self.load_display()
   threading.Thread(target=self.poll, daemon=True).start()
 
  def refresh_sync(self):
@@ -47,15 +48,36 @@ class Dashboard(QWidget):
    (self.sync_root/'dashboard-show.request').write_text('')
   except OSError as e:self.sync_error=str(e)
  def open_rgb_settings(self):
-  dlg=QDialog(self);dlg.setWindowTitle('Sakura • RGB control');dlg.setMinimumWidth(420)
+  self.open_settings(1)
+ def open_settings(self,index=0):
+  dlg=QDialog(self);dlg.setWindowTitle('Sakura • Settings');dlg.setMinimumWidth(560)
   dlg.setStyleSheet('QDialog{background:#201329;color:#f5d9ef} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox{background:#39253e;color:#f5d9ef;padding:8px;border-radius:5px}')
-  layout=QVBoxLayout(dlg);form=QFormLayout();layout.addLayout(form)
+  outer=QVBoxLayout(dlg);tabs=QTabWidget();outer.addWidget(tabs)
+  general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
+  rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
+  display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
   try:profile=json.loads((self.sync_root/'dashboard-rgb.json').read_text())
   except (OSError,ValueError):profile={}
   if not isinstance(profile,dict):profile={}
   try:legacy=json.loads((self.sync_root/'settings.json').read_text())
   except (OSError,ValueError):legacy={}
   if not isinstance(legacy,dict):legacy={}
+  controls={}
+  for key,label,default in [('enabled','Automatic soundtrack switching',False),('shuffle','Shuffle playlists',True),('fallback','Desktop playlist on game exit',True),('adaptive','Automatic Trailmakers scanning',False),('hud_enabled','Combat overlay',True)]:
+   box=QCheckBox();box.setChecked(bool(legacy.get(key,default)));controls[key]=box;g.addRow(label,box)
+  combat=QLineEdit(str(legacy.get('combat','')));g.addRow('Combat playlist',combat)
+  device=QLineEdit(str(legacy.get('device','')));device.setPlaceholderText('Blank = active Spotify device');g.addRow('Playback device',device)
+  threshold=QSpinBox();threshold.setRange(8,100);threshold.setValue(int(legacy.get('threshold',12)));g.addRow('Matching threshold',threshold)
+  advanced=QPushButton('Advanced: game mappings, Spotify sign-in and mech references')
+  g.addRow(advanced)
+  advanced.clicked.connect(lambda:(dlg.reject(),self.open_sync_settings()))
+  try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
+  except (OSError,ValueError):view={}
+  if not isinstance(view,dict):view={}
+  petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
+  visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
+  fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
+  tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
   mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('mode'),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
   brightness=QSlider(Qt.Orientation.Horizontal);brightness.setRange(0,100);brightness.setValue(int(profile.get('brightness',100)));level=QLabel(str(brightness.value())+'%');brightness.valueChanged.connect(lambda v:level.setText(str(v)+'%'));form.addRow('Brightness',brightness);form.addRow('',level)
@@ -73,14 +95,25 @@ class Dashboard(QWidget):
   for key,label in [('keyboard','Keyboard'),('ram','Both RAM sticks'),('mouse','Harpoon mouse')]:
    box=QCheckBox(label);box.setChecked(bool(profile.get(key,legacy.get('rgb_'+key,True))));checks[key]=box;layout.addWidget(box)
   hint=QLabel('Automatic mode follows game detection. Manual mode overrides game lighting only. Brightness 0 turns selected LEDs black; Off releases control.');hint.setWordWrap(True);layout.addWidget(hint)
-  buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dlg.accept);buttons.rejected.connect(dlg.reject);layout.addWidget(buttons)
+  buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dlg.accept);buttons.rejected.connect(dlg.reject);outer.addWidget(buttons)
   if dlg.exec()!=QDialog.DialogCode.Accepted:return
   data=dict(mode=('auto','manual','off')[mode.currentIndex()],brightness=brightness.value())
   data.update({k:[v.red(),v.green(),v.blue()] for k,v in colors.items()});data.update({k:v.isChecked() for k,v in checks.items()})
   try:
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
+   game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.text().strip(),threshold=threshold.value())
+   self.write_setting('dashboard-game.request',game)
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60));self.load_display()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
+ def write_setting(self,name,data):
+  self.sync_root.mkdir(parents=True,exist_ok=True)
+  tmp=self.sync_root/(name+'.tmp');tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/name)
+ def load_display(self):
+  try:v=json.loads((self.sync_root/'dashboard-display.json').read_text())
+  except (OSError,ValueError):v={}
+  self.display_options=v if isinstance(v,dict) else {}
+  self.timer.setInterval(33 if self.display_options.get('fps')==30 else 16)
  def discover_spotify(self):
   try:
    def pulse(kind):
@@ -116,6 +149,9 @@ class Dashboard(QWidget):
   if message:self.audio_status='Spotify capture: '+message.splitlines()[-1];sys.stderr.write(message+'\n')
 
  def update_spectrum(self):
+  if not self.display_options.get('visualiser',True):
+   if self.capture.state()!=QProcess.NotRunning:self.capture.kill()
+   self.spectrum.reset();self.bars=[0]*80;self.audio_status='Visualiser disabled';return
   if self.spotify_target!=self.capture_target:
    if self.capture.state()!=QProcess.NotRunning:
     self.capture.kill()
@@ -146,19 +182,19 @@ class Dashboard(QWidget):
  def keyPressEvent(self,e):
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
-  if e.key()==Qt.Key_F2:self.open_sync_settings()
+  if e.key()==Qt.Key_F2:self.open_settings()
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
  def mousePressEvent(self,e):
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
-  if 1300<=x<=1850 and 90<=y<=145:self.open_rgb_settings()
-  elif 70<=x<=1180 and 615<=y<=705:self.open_sync_settings()
+  if 1300<=x<=1850 and 90<=y<=145:self.open_settings()
+  elif 70<=x<=1180 and 615<=y<=705:self.open_settings()
   super().mousePressEvent(e)
  def paintEvent(self,e):
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
    p.setPen(QColor(color));f=QFont('Sans Serif',size);f.setWeight(QFont.Weight(weight));p.setFont(f);p.drawText(QRectF(x,y,w,h),Qt.AlignVCenter|Qt.AlignLeft,p.fontMetrics().elidedText(str(s),Qt.ElideRight,int(w)))
   p.setPen(Qt.NoPen)
-  for i,(x,y,v) in enumerate(self.petals):
+  for i,(x,y,v) in enumerate(self.petals if self.display_options.get('petals',True) else []):
    p.setBrush(QColor(240,90,239,45));p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
   text(70,40,900,55,'桜の夜  /  SAKURA NIGHT',23,'#f05aef',500);text(1300,14,550,76,time.strftime('%H:%M'),46);text(70,150,1100,45,'NOW PLAYING',17,'#c393cc');text(70,195,1100,90,self.track[0],47);text(70,285,1100,50,self.track[1],25,'#c393cc');
   for i,b in enumerate(self.bars):
@@ -171,7 +207,7 @@ class Dashboard(QWidget):
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
   text(70,95,1100,35,'GAME SYNC  /  '+mode+'  •  '+str(sync.get('playlist','Waiting')),17,accent)
-  p.setPen(Qt.NoPen);p.setBrush(QColor('#39253e'));p.drawRoundedRect(QRectF(1300,99,550,40),8,8);text(1320,99,510,40,'RGB CONTROL  /  F3',17,'#f478d7')
+  p.setPen(Qt.NoPen);p.setBrush(QColor('#39253e'));p.drawRoundedRect(QRectF(1300,99,550,40),8,8);text(1320,99,510,40,'SETTINGS  /  F2',17,'#f478d7')
   text(70,335,1100,32,self.audio_status,14,'#a982b5')
   text(70,615,1100,35,str(sync.get('scanner',self.sync_error or 'Waiting for Game Sync backend')),15,'#c393cc')
   text(70,650,1100,35,str(sync.get('rgb','RGB status unavailable'))+'  •  F2 / click for settings',15,'#a982b5')
