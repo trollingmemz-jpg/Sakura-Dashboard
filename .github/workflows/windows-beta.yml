@@ -15,7 +15,8 @@ jobs:
           repository: trollingmemz-jpg/Sakura-Game-Sync
           ref: windows
           path: game_sync
-          token: ${{ secrets.SAKURA_BUILD_TOKEN || github.token }}
+          persist-credentials: false
+          token: ${{ github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
