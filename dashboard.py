@@ -7,6 +7,7 @@ from PySide6.QtCore import QProcess
 import psutil
 import urllib.request
 from bloom import Bloom
+from spotify_connect import Connect
 from inline_panel import InlinePanel
 from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
 from PySide6.QtGui import QPainterPath
@@ -17,6 +18,7 @@ class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
+  self.connect=Connect(self.sync_root)
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
@@ -98,8 +100,7 @@ class Dashboard(QWidget):
    subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    if action in ('play','pause'):self.local_playing=action=='play'
    return
-  try:self.write_setting('dashboard-player.request',dict(time=time.time(),action=action,**data))
-  except OSError as e:QMessageBox.warning(self,'Spotify',str(e))
+  self.connect.submit(action,**data)
  def open_player(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
   status=QLabel('Discovering Spotify Connect devices…');status.setWordWrap(True);layout.addRow(status)
@@ -116,8 +117,7 @@ class Dashboard(QWidget):
   def send(action,**data):
    pending[0]=time.time();status.setText('Requesting '+action+'…');self.command(action,**data)
   def update():
-   try:state=json.loads((self.sync_root/'dashboard-player.json').read_text())
-   except (OSError,ValueError):state={}
+   state=self.connect.state
    if state.get('time',0)!=seen[0]:
     seen[0]=state.get('time',0);old=devices.currentData();devices.clear()
     available=[d for d in state.get('devices',[]) if d.get('id') and not d.get('is_restricted')]
@@ -126,12 +126,11 @@ class Dashboard(QWidget):
      if d['id']==old or (not old and d.get('is_active')):devices.setCurrentIndex(i)
     transfer.setEnabled(bool(available))
     if not pending[0]:status.setText(state.get('device_error') or (str(len(available))+' available devices' if available else 'No devices found. Open Spotify on the target device.'))
-   try:result=json.loads((self.sync_root/'dashboard-player-result.json').read_text())
-   except (OSError,ValueError):result={}
+   result=self.connect.result
    if pending[0] and result.get('time',0)>=pending[0]:
     pending[0]=0.;status.setText(result.get('error') or (str(devices.count())+' available devices' if result.get('action')=='refresh' else 'Spotify request completed'))
    elif pending[0] and time.time()-pending[0]>30:
-    pending[0]=0.;status.setText('Backend did not respond. Check Game Sync is running and Spotify is connected.')
+    pending[0]=0.;status.setText('Spotify did not respond. Check your network and account connection.')
   transfer.clicked.connect(lambda:send('transfer',device=devices.currentData()) if devices.currentData() else None)
   refresh.clicked.connect(lambda:send('refresh'))
   volume.sliderReleased.connect(lambda:send('volume',value=volume.value()))
@@ -143,8 +142,7 @@ class Dashboard(QWidget):
   if result==2:self.open_sync_settings()
  def poll_player(self):
   try:
-   try:state=json.loads((self.sync_root/'dashboard-player.json').read_text())
-   except (OSError,ValueError):state={}
+   state=self.connect.state
    if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
    else:self.player={};self.devices=[]
    item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
@@ -288,6 +286,7 @@ class Dashboard(QWidget):
   self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
+  self.connect.closed=True
   self.sync_timer.stop()
   self.audio_timer.stop()
   if self.capture.state() != QProcess.NotRunning:
