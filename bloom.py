@@ -7,7 +7,7 @@ class Bloom(InlinePanel):
  def __init__(self,parent,accent):
   super().__init__(parent)
   self.setWindowTitle('Sakura Bloom')
-  self.setMouseTracking(True);self.accent=QColor(accent);self.labels=['Lighting','Games','Spotify','Appearance','System']
+  self.setMouseTracking(True);self.accent=QColor(accent);self.labels=['Lighting','Games','Connections','Appearance','System']
   self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None
   self.timer=QTimer(self);self.timer.timeout.connect(self.update);self.timer.start(16)
   self.path=QPainterPath();self.path.moveTo(0,74)
