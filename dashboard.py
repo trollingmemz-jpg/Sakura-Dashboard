@@ -16,11 +16,13 @@ from PySide6.QtCore import QPointF
 from local_spectrum import LiveSpectrum, RATE
 from windows_audio import WindowsAudio
 from windows_stats import GPUStats
+from windows_media import LocalMedia
+from windows_update import Updater
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1280,480); self.setWindowFlags(Qt.Window); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';self.sync_root.mkdir(parents=True,exist_ok=True); self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
-  self.connect=Connect(self.sync_root)
+  self.connect=Connect(self.sync_root);self.media=LocalMedia();self.updater=Updater(self.sync_root);self.media_key=None
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum();self.win_audio=WindowsAudio();self.gpu_stats=GPUStats()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
@@ -34,8 +36,28 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  if not self.display_options.get('welcome_seen'):QTimer.singleShot(600,self.welcome)
   threading.Thread(target=self.poll, daemon=True).start()
 
+ def welcome(self):
+  dlg=InlinePanel(self);dlg.setWindowTitle('Welcome to Sakura');layout=QVBoxLayout(dlg)
+  for line in ('Your music, games and system in one dashboard.','Play music in Spotify or another Windows media app. Basic playback needs no Premium account.','Click the blossom in the lower-right corner to open settings.','Optional: connect Spotify Premium for remote devices and automatic playlists.','Optional: enable the system audio visualiser or OpenRGB lighting in settings.'):
+   label=QLabel(line);label.setWordWrap(True);layout.addWidget(label)
+  done=QPushButton('Get started');done.clicked.connect(dlg.accept);layout.addWidget(done)
+  dlg.exec();self.display_options['welcome_seen']=True;self.write_setting('dashboard-display.json',self.display_options)
+ def open_updates(self):
+  dlg=InlinePanel(self);dlg.setWindowTitle('Sakura updates');layout=QVBoxLayout(dlg)
+  status=QLabel(self.updater.status);status.setWordWrap(True);layout.addWidget(status)
+  check=QPushButton('Check for updates');check.clicked.connect(self.updater.check);layout.addWidget(check)
+  download=QPushButton('Download update');download.clicked.connect(self.updater.download);layout.addWidget(download)
+  install=QPushButton('Install update');layout.addWidget(install)
+  def apply():
+   try:self.updater.launch();dlg.accept();self.close()
+   except OSError as e:status.setText(str(e))
+  install.clicked.connect(apply)
+  def update():
+   status.setText(self.updater.status);check.setEnabled(not self.updater.busy);download.setEnabled(bool(self.updater.asset) and not self.updater.busy and not self.updater.ready);install.setEnabled(bool(self.updater.ready))
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update();dlg.exec();timer.stop()
  def refresh_sync(self):
   try:
    state=json.loads((self.sync_root/'dashboard-status.json').read_text())
@@ -108,9 +130,11 @@ class Dashboard(QWidget):
     subprocess.Popen([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,str(Path(__file__).resolve())],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     dlg.accept();self.close()
    except OSError as e:log.setText(str(e))
-  for label,fn in [('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Open Windows beta downloads',lambda:__import__('webbrowser').open('https://github.com/trollingmemz-jpg/Sakura-Dashboard/actions')),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  for label,fn in [('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
-  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();dlg.exec();timer.stop()
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();result=dlg.exec();timer.stop()
+  if result==3:self.open_updates()
+  elif result==4:self.welcome()
  def open_account(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Spotify account');layout=QFormLayout(dlg)
   client=QLineEdit(str(self.connect.read('settings.json').get('client','')));layout.addRow('Spotify client ID',client)
@@ -127,11 +151,13 @@ class Dashboard(QWidget):
   button=QPushButton('Connect Spotify');button.clicked.connect(login);layout.addRow(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);dlg.exec();timer.stop()
  def playing(self):
-  return bool(self.player.get('is_playing'))
+  return bool(self.media.state.get('playing')) if self.media.state else bool(self.player.get('is_playing'))
  def command(self,action,**data):
-  self.connect.submit(action,**data)
+  if action in ('play','pause','previous','next') and self.media.state:self.media.submit(action)
+  else:self.connect.submit(action,**data)
  def open_player(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
+  hint=QLabel('Local playback works without an account. Remote Spotify devices and automatic playlists require Premium.');hint.setWordWrap(True);layout.addRow(hint)
   status=QLabel('Discovering Spotify Connect devices…');status.setWordWrap(True);layout.addRow(status)
   devices=QComboBox();layout.addRow('Playback device',devices)
   transfer=QPushButton('Transfer playback');transfer.setEnabled(False);layout.addRow(transfer)
@@ -166,7 +192,9 @@ class Dashboard(QWidget):
   play.clicked.connect(lambda:send('playlist',value=playlist.text()))
   shuffle.toggled.connect(lambda value:send('shuffle',value=value))
   repeat.activated.connect(lambda _:send('repeat',value=repeat.currentText()))
-  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update();send('refresh')
+  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update()
+  if self.connect.read('token.json').get('refresh_token'):send('refresh')
+  else:status.setText('Optional Spotify connection: use account settings to sign in.')
   result=dlg.exec();timer.stop()
   if result==2:self.open_account()
  def poll_player(self):
@@ -174,6 +202,15 @@ class Dashboard(QWidget):
    state=self.connect.state
    if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
    else:self.player={};self.devices=[]
+   local=self.media.state
+   if local:
+    self.track=(local.get('title') or 'Nothing playing',local.get('artist',''))
+    if local.get('key')!=self.media_key:
+     self.media_key=local.get('key');self.art=QImage.fromData(local.get('art',b''));self.art_url=''
+     if not self.art.isNull():
+      c=self.art.scaled(1,1,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation).pixelColor(0,0);h,s,v,_=c.getHsvF();self.art_accent=QColor.fromHsvF(max(0,h),max(.35,min(.8,s)),.95)
+    return
+   self.media_key=None;self.track=('Nothing playing','')
    item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
    if url.startswith('https://open.spotify.com/image/'):url=url.replace('https://open.spotify.com/image/','https://i.scdn.co/image/',1)
    if url and url!=self.art_url and url.startswith(('https://','http://','file://')):
@@ -249,7 +286,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
+   self.write_setting('dashboard-display.json',dict(self.display_options,petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -269,7 +306,7 @@ class Dashboard(QWidget):
   self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
 
  def closeEvent(self, event):
-  self.connect.closed=True;self.win_audio.closed=True
+  self.connect.closed=True;self.win_audio.closed=True;self.media.closed=True
   if self.sync_status:
    try:self.write_setting('dashboard-advanced.request',dict(action='quit'))
    except OSError:pass
@@ -322,7 +359,7 @@ class Dashboard(QWidget):
   art=self.art
   if not art.isNull():p.drawImage(QRectF(70,150,200,200),art)
   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
-  item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
+  item=self.player.get('item') or {};title=self.track[0] if self.media.state else item.get('name') or self.track[0];artist=self.track[1] if self.media.state else ', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
   text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
   p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
   for x,direction in ((335,-1),(495,1)):
@@ -331,7 +368,7 @@ class Dashboard(QWidget):
    p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
   else:
    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
-  text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
+  text(550,330,630,60,(self.player.get('device') or {}).get('name','Music connections'),18,self.accent)
   for i,b in enumerate(self.bars):
    h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
   p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
@@ -341,7 +378,7 @@ class Dashboard(QWidget):
   sync=self.sync_status
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
-  text(70,645,1100,35,'Sakura active' if sync else 'Game Sync offline',15,'#a982b5')
+  text(70,645,1100,35,'Update available — open System' if self.updater.asset else 'Sakura active • Blossom opens settings' if sync else 'Sakura active • Game Sync offline',15,'#a982b5')
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
   p.setPen(QPen(self.accent,1.3));p.setBrush(QColor('#211329'));p.drawEllipse(QPointF(1830,655),36,36)
   text(1808,624,60,62,'桜',25,self.accent)
