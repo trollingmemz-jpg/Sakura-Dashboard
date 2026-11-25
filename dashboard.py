@@ -14,13 +14,15 @@ from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
 from PySide6.QtCore import QPointF
 from local_spectrum import LiveSpectrum, RATE
+from windows_audio import WindowsAudio
+from windows_stats import GPUStats
 class Dashboard(QWidget):
  def __init__(self):
-  super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
-  self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
+  super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1280,480); self.setWindowFlags(Qt.Window); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
+  self.sync_root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';self.sync_root.mkdir(parents=True,exist_ok=True); self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
   self.connect=Connect(self.sync_root)
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
-  self.spectrum = LiveSpectrum()
+  self.spectrum = LiveSpectrum();self.win_audio=WindowsAudio();self.gpu_stats=GPUStats()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
   self.capture.readyReadStandardOutput.connect(self.audio)
@@ -41,12 +43,13 @@ class Dashboard(QWidget):
   except (OSError,ValueError,KeyError,TypeError):self.sync_status={}
  def ensure_sync(self):
   if self.sync_status or self.sync_started:return
-  root=Path.home()/'.local/share/sakura-game-sync'
-  python=root/'venv/bin/python'; entry=root/'app.py'
+  root=Path(__file__).resolve().parent/'game_sync'
+  python=Path(sys.executable); entry=root/'app.py'
+  if getattr(sys,'frozen',False):root=Path(sys.executable).resolve().parent;python=root/'SakuraGameSync.exe';entry=python
   if not python.is_file() or not entry.is_file():
    self.sync_error='Game Sync installation not found';return
   try:
-   subprocess.Popen([str(python),str(entry),'--background'],cwd=root,start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   subprocess.Popen(([str(python),'--background'] if getattr(sys,'frozen',False) else [str(python),str(entry),'--background']),cwd=root,creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    self.sync_started=True
   except OSError as e:self.sync_error=str(e)
  def open_sync_settings(self):
@@ -63,6 +66,7 @@ class Dashboard(QWidget):
    i=table.rowCount();table.insertRow(i)
    for j,value in enumerate(row):table.setItem(i,j,QTableWidgetItem(str(value)))
   for row in rows:add(row)
+  if not rows:add(['Trailmakers','585420','trailmakers.exe','0WJzQWmJyamJTDxct2Tzw8'])
   for label,fn in [('Add game',lambda:add(['New game','','',''])),('Remove selected game',lambda:table.removeRow(table.currentRow()) if table.currentRow()>=0 else None),('Save game mappings',lambda:request('mappings',rows=[[table.item(i,j).text() if table.item(i,j) else '' for j in range(4)] for i in range(table.rowCount())])),('Start scanner',lambda:request('start')),('Stop scanner',lambda:request('stop')),('Install vision dependencies',lambda:request('dependencies'))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   def images():
@@ -89,11 +93,11 @@ class Dashboard(QWidget):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
   info=QLabel();info.setWordWrap(True);layout.addWidget(info)
   log=QLabel();log.setWordWrap(True);layout.addWidget(log)
-  state=Path(os.environ.get('XDG_STATE_HOME',str(Path.home()/'.local/state')))/'sakura'
+  state=self.sync_root
   def update():
    info.setText('Game Sync: '+('Running' if self.sync_status else 'Offline')+'\nSpotify: '+(self.connect.state.get('device_error') or ('Connected' if self.connect.state.get('time') else 'Connecting'))+'\n'+self.audio_status+'\n'+str(self.sync_status.get('scanner','Scanner offline'))+'\n'+str(self.sync_status.get('rgb','Lighting offline')))
   def restart():
-   if self.sync_status:self.write_setting('dashboard-restart.request',{})
+   if self.sync_status:self.write_setting('dashboard-advanced.request',dict(action='quit'));self.sync_started=False;QTimer.singleShot(2500,self.ensure_sync)
    else:self.sync_started=False;self.ensure_sync()
    log.setText('Game Sync restart requested.')
   def logs():
@@ -101,10 +105,10 @@ class Dashboard(QWidget):
    except OSError:log.setText('No update log available.')
   def relaunch():
    try:
-    subprocess.Popen(['bash',str(Path(__file__).resolve().parent/'run.sh')],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    subprocess.Popen([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,str(Path(__file__).resolve())],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     dlg.accept();self.close()
    except OSError as e:log.setText(str(e))
-  for label,fn in [('Restart Game Sync',restart),('Check for updates and relaunch',relaunch),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  for label,fn in [('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Open Windows beta downloads',lambda:__import__('webbrowser').open('https://github.com/trollingmemz-jpg/Sakura-Dashboard/actions')),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();dlg.exec();timer.stop()
  def open_account(self):
@@ -123,13 +127,8 @@ class Dashboard(QWidget):
   button=QPushButton('Connect Spotify');button.clicked.connect(login);layout.addRow(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);dlg.exec();timer.stop()
  def playing(self):
-  if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
   return bool(self.player.get('is_playing'))
  def command(self,action,**data):
-  if action in ('play','pause','previous','next') and self.spotify_target and self.local_playing is not None:
-   subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-   if action in ('play','pause'):self.local_playing=action=='play'
-   return
   self.connect.submit(action,**data)
  def open_player(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
@@ -176,10 +175,6 @@ class Dashboard(QWidget):
    if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
    else:self.player={};self.devices=[]
    item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
-   try:
-    local_url=subprocess.check_output(['playerctl','--player=spotify','metadata','mpris:artUrl'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
-    if local_url and (self.spotify_target or not url):url=local_url
-   except (OSError,subprocess.SubprocessError):pass
    if url.startswith('https://open.spotify.com/image/'):url=url.replace('https://open.spotify.com/image/','https://i.scdn.co/image/',1)
    if url and url!=self.art_url and url.startswith(('https://','http://','file://')):
     with urllib.request.urlopen(url,timeout=4) as response:raw=response.read(4000000)
@@ -216,7 +211,7 @@ class Dashboard(QWidget):
   except (OSError,ValueError):view={}
   if not isinstance(view,dict):view={}
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
-  visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
+  visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',False)));dform.addRow('System audio visualiser (WASAPI)',visual)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
   tabs.setCurrentIndex(index)
@@ -265,58 +260,16 @@ class Dashboard(QWidget):
   except (OSError,ValueError):v={}
   self.display_options=v if isinstance(v,dict) else {}
   self.timer.setInterval(33 if self.display_options.get('fps')==30 else 16)
- def discover_spotify(self):
-  try:
-   def pulse(kind):
-    return json.loads(subprocess.check_output(['pactl','-f','json','list',kind],text=True,stderr=subprocess.DEVNULL,timeout=2))
-   streams=pulse('sink-inputs')
-   candidates=[]
-   for stream in streams:
-    props=stream.get('properties',{})
-    binary=str(props.get('application.process.binary','')).lower()
-    name=str(props.get('application.name','')).lower()
-    appid=str(props.get('application.id','')).lower()
-    if binary=='spotify' or name=='spotify' or appid=='com.spotify.client':candidates.append(stream)
-   if not candidates:return None
-   stream=next((v for v in candidates if not v.get('corked',False)),candidates[0])
-   sink=next((v for v in pulse('sinks') if str(v.get('index'))==str(stream.get('sink'))),None)
-   if not sink:return None
-   monitor=sink.get('monitor_source_name') or sink.get('name','')+'.monitor'
-   return (str(stream['index']),monitor)
-  except (OSError,ValueError,TypeError,KeyError,subprocess.SubprocessError):return None
- def start_capture(self):
-  if not self.spotify_target:return
-  index,source=self.spotify_target
-  self.capture_target=self.spotify_target
-  self.next_capture=time.monotonic()+3
-  self.capture.start('parec',['--raw','--format=s16le',f'--rate={RATE}','--channels=2','--latency-msec=25','--device='+source,'--monitor-stream='+index])
-  self.audio_status='Spotify audio • local capture'
-
- def audio(self):
-  self.spectrum.feed(bytes(self.capture.readAllStandardOutput()))
-
- def audio_error(self):
-  message=bytes(self.capture.readAllStandardError()).decode(errors='replace').strip()
-  if message:self.audio_status='Spotify capture: '+message.splitlines()[-1];sys.stderr.write(message+'\n')
-
+ def audio(self):pass
+ def audio_error(self):pass
  def update_spectrum(self):
-  if not self.display_options.get('visualiser',True):
-   if self.capture.state()!=QProcess.NotRunning:self.capture.kill()
-   self.spectrum.reset();self.bars=[0]*80;self.audio_status='Visualiser disabled';return
-  if self.spotify_target!=self.capture_target:
-   if self.capture.state()!=QProcess.NotRunning:
-    self.capture.kill()
-    return
-   self.capture_target=self.spotify_target
-   self.spectrum.reset()
-   self.next_capture=0.
-  if self.capture.state()==QProcess.NotRunning:
-   if self.spotify_target and time.monotonic()>=self.next_capture:self.start_capture()
-   elif not self.spotify_target:self.audio_status='Waiting for Spotify audio'
-  self.bars=self.spectrum.tick()
+  self.win_audio.enabled=bool(self.display_options.get('visualiser',False))
+  if not self.win_audio.enabled:
+   self.spectrum.reset();self.bars=[0]*80;self.audio_status='System audio visualiser disabled';return
+  self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
 
  def closeEvent(self, event):
-  self.connect.closed=True
+  self.connect.closed=True;self.win_audio.closed=True
   self.sync_timer.stop()
   self.audio_timer.stop()
   if self.capture.state() != QProcess.NotRunning:
@@ -326,14 +279,11 @@ class Dashboard(QWidget):
 
  def poll(self):
   while True:
-   self.spotify_target=self.discover_spotify()
-   self.poll_player()
-   try:self.local_playing=subprocess.check_output(['playerctl','--player=spotify','status'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()=='Playing'
-   except (OSError,subprocess.SubprocessError):self.local_playing=None
-   def cmd(a):
-    try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
-    except Exception:return ''
-   gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','--player=spotify','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
+   try:
+    self.poll_player()
+    self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent,'—',self.gpu_stats.read())
+   except Exception:pass
+   time.sleep(2)
  def keyPressEvent(self,e):
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if e.key()==Qt.Key_Escape:self.close()
@@ -366,7 +316,8 @@ class Dashboard(QWidget):
   for i,(x,y,v) in enumerate(self.petals if self.display_options.get('petals',True) else []):
    p.setBrush(QColor(240,90,239,45));p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
   text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500);text(1300,14,550,76,time.strftime('%H:%M'),46)
-  if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
+  art=self.art
+  if not art.isNull():p.drawImage(QRectF(70,150,200,200),art)
   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
   item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
   text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
