@@ -36,6 +36,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.update_check_timer=QTimer(self);self.update_check_timer.timeout.connect(self.updater.check);self.update_check_timer.start(1800000)
   if not self.display_options.get('welcome_seen'):QTimer.singleShot(600,self.welcome)
   threading.Thread(target=self.poll, daemon=True).start()
 
@@ -50,7 +51,7 @@ class Dashboard(QWidget):
   status=QLabel(self.updater.status);status.setWordWrap(True);layout.addWidget(status)
   check=QPushButton('Check for updates');check.clicked.connect(self.updater.check);layout.addWidget(check)
   download=QPushButton('Download update');download.clicked.connect(self.updater.download);layout.addWidget(download)
-  install=QPushButton('Install update');layout.addWidget(install)
+  install=QPushButton('Install update and restart');layout.addWidget(install)
   def apply():
    try:self.updater.launch();dlg.accept();self.close()
    except OSError as e:status.setText(str(e))
@@ -89,6 +90,18 @@ class Dashboard(QWidget):
    for j,value in enumerate(row):table.setItem(i,j,QTableWidgetItem(str(value)))
   for row in rows:add(row)
   if not rows:add(['Trailmakers','585420','trailmakers.exe','0WJzQWmJyamJTDxct2Tzw8'])
+  hint=QLabel('Steam games are detected automatically. Import installed games, then optionally paste a Spotify playlist link for each game. Blank playlists leave music unchanged.');hint.setWordWrap(True);layout.addWidget(hint)
+  def discover():
+   try:library=json.loads((self.sync_root/'steam-library.json').read_text())
+   except (OSError,ValueError):library={}
+   existing={table.item(i,1).text() for i in range(table.rowCount()) if table.item(i,1)}
+   count=0
+   for appid,(name,folder) in sorted(library.items(),key=lambda x:x[1][0].casefold()):
+    if appid not in existing:
+     add([name,appid,'','']);count+=1
+   status.setText(f'Added {count} installed games. Save game mappings to keep them.' if library else 'No Steam library found yet. Open Steam and try again.')
+  button=QPushButton('Import installed Steam games');button.clicked.connect(discover);layout.addWidget(button)
+  button=QPushButton('Refresh Steam library');button.clicked.connect(lambda:request('discover'));layout.addWidget(button)
   for label,fn in [('Add game',lambda:add(['New game','','',''])),('Remove selected game',lambda:table.removeRow(table.currentRow()) if table.currentRow()>=0 else None),('Save game mappings',lambda:request('mappings',rows=[[table.item(i,j).text() if table.item(i,j) else '' for j in range(4)] for i in range(table.rowCount())])),('Start scanner',lambda:request('start')),('Stop scanner',lambda:request('stop')),('Install vision dependencies',lambda:request('dependencies'))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   def images():
