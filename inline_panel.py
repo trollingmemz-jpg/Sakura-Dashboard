@@ -7,6 +7,7 @@ class InlinePanel(QWidget):
   self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,True)
   self.setStyleSheet('InlinePanel{background:#201329;border:1px solid #805071;border-radius:12px} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox,QLineEdit,QSpinBox,QTableWidget{background:#39253e;color:#f5d9ef;padding:6px;border-radius:5px}')
   self.hide()
+ def setMinimumWidth(self,width):pass
  def setWindowTitle(self,title):self.title=title
  def accept(self):self.done(1)
  def reject(self):self.done(0)
@@ -28,7 +29,7 @@ class InlinePanel(QWidget):
    outer=QVBoxLayout(self);header=QHBoxLayout();label=QLabel(self.title);label.setStyleSheet('font-size:18px;color:#f478d7');header.addWidget(label);header.addStretch();back=QPushButton('Close');back.clicked.connect(self.reject);header.addWidget(back);outer.addLayout(header)
    scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QScrollArea.Shape.NoFrame);scroll.setWidget(body);outer.addWidget(scroll)
   self.host.installEventFilter(self);self.fit();self.show();self.raise_();self.setFocus()
-  self.loop=QEventLoop();self.loop.exec();self.loop=None;self.host.removeEventFilter(self);self.deleteLater();return self.result_code
+  self.loop=QEventLoop();self.loop.exec();self.loop=None;self.host.removeEventFilter(self);self.hide();self.deleteLater();return self.result_code
  def keyPressEvent(self,e):
   if e.key()==Qt.Key.Key_Escape:self.reject()
   else:super().keyPressEvent(e)
