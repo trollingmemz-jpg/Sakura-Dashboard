@@ -1,12 +1,12 @@
 import math,time
 from PySide6.QtCore import Qt,QTimer,QPointF,QRectF
 from PySide6.QtGui import QPainter,QPainterPath,QColor,QPen,QLinearGradient,QRadialGradient,QFont,QTransform
-from PySide6.QtWidgets import QDialog
+from inline_panel import InlinePanel
 
-class Bloom(QDialog):
+class Bloom(InlinePanel):
  def __init__(self,parent,accent):
   super().__init__(parent)
-  self.setWindowTitle('Sakura Bloom');self.resize(480,480);self.setMinimumSize(360,360)
+  self.setWindowTitle('Sakura Bloom')
   self.setMouseTracking(True);self.accent=QColor(accent);self.labels=['Lighting','Games','Spotify','Appearance','System']
   self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None
   self.timer=QTimer(self);self.timer.timeout.connect(self.update);self.timer.start(16)
@@ -30,7 +30,7 @@ class Bloom(QDialog):
   p.fillRect(self.rect(),QColor('#100b20'));p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
   elapsed=time.monotonic()-self.started
   if self.closing is not None and time.monotonic()-self.closing>=.30:
-   self.done(self.choice+2 if self.choice>=0 else 0);return
+   QTimer.singleShot(0,lambda:self.done(self.choice+2 if self.choice>=0 else 0));return
   for i,label in enumerate(self.labels):
    t=max(0,min(1,(elapsed-i*.27)/.27))
    if self.closing is not None:t=1-max(0,min(1,(time.monotonic()-self.closing-(4-i)*.045)/.12))
