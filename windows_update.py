@@ -19,7 +19,7 @@ class Updater:
     m=re.fullmatch(r'windows-beta-(\d+)',release.get('tag_name',''))
     if not m or release.get('draft'):continue
     for asset in release.get('assets',[]):
-     if asset.get('name')=='Sakura-Windows-Beta.exe' and asset.get('digest','').startswith('sha256:'):
+     if asset.get('name')=='Sakura-Windows-Beta.exe' and (asset.get('digest') or '').startswith('sha256:'):
       options.append((int(m[1]),asset))
    if not options:self.status='No verified beta installer found.';return
    build,asset=max(options,key=lambda a:a[0])
@@ -51,4 +51,4 @@ class Updater:
    self.busy=False
  def launch(self):
   if not self.ready:raise RuntimeError('Download an update first.')
-  subprocess.Popen([str(self.ready)],cwd=str(self.root))
+  subprocess.Popen([str(self.ready),'/CLOSEAPPLICATIONS','/RESTARTAPPLICATIONS'],cwd=str(self.root))
