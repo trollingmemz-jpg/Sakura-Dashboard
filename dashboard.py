@@ -1,4 +1,5 @@
-import sys, math, random, time, subprocess, threading, os, glob
+import sys, math, random, time, subprocess, threading, os, glob, json
+from pathlib import Path
 from PySide6.QtCore import Qt,QTimer,QRectF
 from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
 from PySide6.QtWidgets import QApplication,QWidget
@@ -8,6 +9,7 @@ from sakura_connect.spectrum import LiveSpectrum, RATE
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
+  self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
   self.spectrum = LiveSpectrum(int(os.getenv('SAKURA_VISUAL_DELAY_MS', '0')))
   self.capture = QProcess(self)
   self.capture.readyReadStandardOutput.connect(self.audio)
@@ -21,6 +23,29 @@ class Dashboard(QWidget):
   self.timer.start(16)
   threading.Thread(target=self.poll, daemon=True).start()
 
+ def refresh_sync(self):
+  try:
+   state=json.loads((self.sync_root/'dashboard-status.json').read_text())
+   self.sync_status=state if abs(time.time()-state['time'])<5 else {}
+  except (OSError,ValueError,KeyError,TypeError):self.sync_status={}
+ def ensure_sync(self):
+  if self.sync_status or self.sync_started:return
+  root=Path.home()/'.local/share/sakura-game-sync'
+  python=root/'venv/bin/python'; entry=root/'app.py'
+  if not python.is_file() or not entry.is_file():
+   self.sync_error='Game Sync installation not found';return
+  try:
+   subprocess.Popen([str(python),str(entry),'--background'],cwd=root,start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   self.sync_started=True
+  except OSError as e:self.sync_error=str(e)
+ def open_sync_settings(self):
+  if not self.sync_status:
+   self.sync_started=False;self.ensure_sync()
+   return
+  try:
+   self.sync_root.mkdir(parents=True,exist_ok=True)
+   (self.sync_root/'dashboard-show.request').write_text('')
+  except OSError as e:self.sync_error=str(e)
  def start_capture(self):
   source = os.getenv('SAKURA_SOURCE', 'sakura_bridge.monitor')
   self.capture.start('parec', ['--raw', '--format=s16le', f'--rate={RATE}',
@@ -40,6 +65,7 @@ class Dashboard(QWidget):
   self.bars = self.spectrum.tick()
 
  def closeEvent(self, event):
+  self.sync_timer.stop()
   self.audio_timer.stop()
   if self.capture.state() != QProcess.NotRunning:
    self.capture.kill()
@@ -55,6 +81,11 @@ class Dashboard(QWidget):
  def keyPressEvent(self,e):
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
+  if e.key()==Qt.Key_F2:self.open_sync_settings()
+ def mousePressEvent(self,e):
+  x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
+  if 70<=x<=1180 and 615<=y<=705:self.open_sync_settings()
+  super().mousePressEvent(e)
  def paintEvent(self,e):
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
@@ -69,5 +100,11 @@ class Dashboard(QWidget):
   for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
    y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
    if value is not None:p.fillRect(QRectF(1300,y+112,500,4),QColor('#4b294c'));p.fillRect(QRectF(1300,y+112,5*value,4),QColor('#f05aef'))
-  text(70,640,1100,45,'AFTER HOURS  /  SYSTEM AUDIO',15,'#a982b5');text(1300,640,530,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
+  sync=self.sync_status
+  mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
+  accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
+  text(70,95,1100,35,'GAME SYNC  /  '+mode+'  •  '+str(sync.get('playlist','Waiting')),17,accent)
+  text(70,615,1100,35,str(sync.get('scanner',self.sync_error or 'Waiting for Game Sync backend')),15,'#c393cc')
+  text(70,650,1100,35,str(sync.get('rgb','RGB status unavailable'))+'  •  F2 / click for settings',15,'#a982b5')
+  text(1300,640,530,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
 app=QApplication(sys.argv);w=Dashboard();w.show();sys.exit(app.exec())
