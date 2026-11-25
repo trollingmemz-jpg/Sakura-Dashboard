@@ -44,15 +44,28 @@ class Bloom(InlinePanel):
    p.setBrush(g);p.setPen(QPen(self.accent.darker(210),.8));p.drawPath(self.path)
    if self.cursor is not None:
     dx=self.cursor.x();dy=self.cursor.y();r=math.hypot(dx,dy)
-    angle=math.atan2(dy,dx);delta=math.atan2(math.sin(angle-a),math.cos(angle-a))
-    weight=math.exp(-.5*(delta/.70)**2)*max(0,min(1,(r-25)/30))
-    if weight>.01:
-     theta=math.radians(rot);lx=(dx-x)*math.cos(theta)+(dy-y)*math.sin(theta);ly=-(dx-x)*math.sin(theta)+(dy-y)*math.cos(theta)
-     progress=max(0,min(1,(74-ly)/148))
-     light=QLinearGradient(0,74,0,-74);c=QColor(self.accent);c.setAlphaF(weight*.55);light.setColorAt(0,c);light.setColorAt(max(0,progress-.10),c)
-     c=QColor(self.accent.lighter(160));c.setAlphaF(weight*.8);light.setColorAt(progress,c);c.setAlpha(0);light.setColorAt(min(1,progress+.13),c);light.setColorAt(1,c)
-     p.setPen(Qt.PenStyle.NoPen);p.setBrush(light);p.drawPath(self.path)
-     spot=QRadialGradient(lx,ly,75);c=QColor(self.accent.lighter(170));c.setAlphaF(weight*.45);spot.setColorAt(0,c);c.setAlpha(0);spot.setColorAt(1,c);p.setBrush(spot);p.drawPath(self.path)
+    theta=math.radians(rot);lx=(dx-x)*math.cos(theta)+(dy-y)*math.sin(theta);ly=-(dx-x)*math.sin(theta)+(dy-y)*math.cos(theta)
+    # Resolve hover in actual paint order, so overlapping petals cannot both be primary.
+    primary=-1
+    if r>30 and elapsed>=1.35 and self.closing is None:
+     for j in range(4,-1,-1):
+      angle=-math.pi/2+j*2*math.pi/5
+      tr=QTransform();tr.translate(65*math.cos(angle),65*math.sin(angle));tr.rotate(j*72)
+      inv,valid=tr.inverted()
+      if valid and self.path.contains(inv.map(self.cursor)):
+       primary=j;break
+    if primary>=0:
+     p.save();p.setClipPath(self.path);p.setPen(Qt.PenStyle.NoPen)
+     if i==primary:
+      progress=max(0,min(1,(74-ly)/148))
+      light=QLinearGradient(0,74,lx,ly if abs(ly-74)>1 else 73)
+      c=QColor(self.accent);c.setAlphaF(.23);light.setColorAt(0,c);c.setAlphaF(.14);light.setColorAt(.72,c);c.setAlpha(0);light.setColorAt(1,c)
+      p.fillPath(self.path,light)
+      spot=QRadialGradient(lx,ly,43);c=QColor(self.accent);c.setAlphaF(.32);spot.setColorAt(0,c);c.setAlphaF(.10);spot.setColorAt(.55,c);c.setAlpha(0);spot.setColorAt(1,c);p.fillPath(self.path,spot)
+     elif (i-primary)%5 in (1,4):
+      # Only a tiny, local halo can cross the shared edge, never a whole-petal beam.
+      spot=QRadialGradient(lx,ly,15);c=QColor(self.accent);c.setAlphaF(.065);spot.setColorAt(0,c);c.setAlpha(0);spot.setColorAt(1,c);p.fillPath(self.path,spot)
+     p.restore()
    p.restore()
   for i,label in enumerate(self.labels):
    if elapsed<(i+1)*.27:continue
