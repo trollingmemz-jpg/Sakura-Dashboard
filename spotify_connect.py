@@ -1,6 +1,7 @@
 """Dashboard-owned Spotify Connect worker. No Game Sync process dependency."""
 import os,json,time,queue,threading,tempfile,urllib.request,urllib.parse,urllib.error
 from pathlib import Path
+from token_lock import token_lock
 class Connect:
  def __init__(self,root):
   self.root=Path(root);self.queue=queue.Queue();self.state={};self.result={};self.closed=False
@@ -12,10 +13,8 @@ class Connect:
   self.queue.put((action,data))
  def token(self):
   # Share the existing PKCE login; keep refresh-token writes atomic.
-  import fcntl
   self.root.mkdir(parents=True,exist_ok=True)
-  with open(self.root/'spotify-token.lock','a') as lock:
-   fcntl.flock(lock,fcntl.LOCK_EX)
+  with token_lock(self.root/'spotify-token.lock'):
    token=self.read('token.json');client=self.read('settings.json').get('client','')
    if not client or not token.get('refresh_token'):raise RuntimeError('Connect Spotify in account settings first.')
    if time.time()>=token.get('expires_at',0)-60:
@@ -30,7 +29,7 @@ class Connect:
      if os.path.exists(path):os.unlink(path)
    return token['access_token']
  def login(self,client):
-  import secrets,hashlib,base64,http.server,webbrowser,fcntl
+  import secrets,hashlib,base64,http.server,webbrowser
   client=client.strip()
   if not client:raise ValueError('Enter your Spotify developer client ID.')
   verifier=secrets.token_urlsafe(64);state=secrets.token_urlsafe(24);challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
@@ -51,8 +50,7 @@ class Connect:
   with urllib.request.urlopen(req,timeout=12) as r:token=json.load(r)
   token['expires_at']=time.time()+token['expires_in']
   self.root.mkdir(parents=True,exist_ok=True)
-  with open(self.root/'spotify-token.lock','a') as guard:
-   fcntl.flock(guard,fcntl.LOCK_EX)
+  with token_lock(self.root/'spotify-token.lock'):
    cfg=self.read('settings.json');cfg['client']=client
    for name,data in [('token.json',token),('settings.json',cfg)]:
     fd,path=tempfile.mkstemp(dir=self.root,prefix='sakura-auth-')
