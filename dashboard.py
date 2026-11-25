@@ -5,16 +5,16 @@ from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
 from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayout,QComboBox,QSlider,QCheckBox,QPushButton,QColorDialog,QDialogButtonBox,QLabel,QMessageBox
 from PySide6.QtCore import QProcess
 import psutil
-from sakura_connect.spectrum import LiveSpectrum, RATE
+from local_spectrum import LiveSpectrum, RATE
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
-  self.spectrum = LiveSpectrum(int(os.getenv('SAKURA_VISUAL_DELAY_MS', '0')))
+  self.spectrum = LiveSpectrum()
+  self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
   self.capture.readyReadStandardOutput.connect(self.audio)
   self.capture.readyReadStandardError.connect(self.audio_error)
-  self.start_capture()
   self.audio_timer = QTimer(self)
   self.audio_timer.timeout.connect(self.update_spectrum)
   self.audio_timer.start(50)
@@ -81,23 +81,52 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
+ def discover_spotify(self):
+  try:
+   def pulse(kind):
+    return json.loads(subprocess.check_output(['pactl','-f','json','list',kind],text=True,stderr=subprocess.DEVNULL,timeout=2))
+   streams=pulse('sink-inputs')
+   candidates=[]
+   for stream in streams:
+    props=stream.get('properties',{})
+    binary=str(props.get('application.process.binary','')).lower()
+    name=str(props.get('application.name','')).lower()
+    appid=str(props.get('application.id','')).lower()
+    if binary=='spotify' or name=='spotify' or appid=='com.spotify.client':candidates.append(stream)
+   if not candidates:return None
+   stream=next((v for v in candidates if not v.get('corked',False)),candidates[0])
+   sink=next((v for v in pulse('sinks') if str(v.get('index'))==str(stream.get('sink'))),None)
+   if not sink:return None
+   monitor=sink.get('monitor_source_name') or sink.get('name','')+'.monitor'
+   return (str(stream['index']),monitor)
+  except (OSError,ValueError,TypeError,KeyError,subprocess.SubprocessError):return None
  def start_capture(self):
-  source = os.getenv('SAKURA_SOURCE', 'sakura_bridge.monitor')
-  self.capture.start('parec', ['--raw', '--format=s16le', f'--rate={RATE}',
-                               '--channels=2', '--latency-msec=25', '--device=' + source])
-  self.next_capture = time.monotonic() + 3
+  if not self.spotify_target:return
+  index,source=self.spotify_target
+  self.capture_target=self.spotify_target
+  self.next_capture=time.monotonic()+3
+  self.capture.start('parec',['--raw','--format=s16le',f'--rate={RATE}','--channels=2','--latency-msec=25','--device='+source,'--monitor-stream='+index])
+  self.audio_status='Spotify audio • local capture'
 
  def audio(self):
   self.spectrum.feed(bytes(self.capture.readAllStandardOutput()))
 
  def audio_error(self):
-  sys.stderr.write(bytes(self.capture.readAllStandardError()).decode(errors='replace'))
+  message=bytes(self.capture.readAllStandardError()).decode(errors='replace').strip()
+  if message:self.audio_status='Spotify capture: '+message.splitlines()[-1];sys.stderr.write(message+'\n')
 
  def update_spectrum(self):
-  if self.capture.state() == QProcess.NotRunning and time.monotonic() >= self.next_capture:
-   self.spectrum.pcm = b''
-   self.start_capture()
-  self.bars = self.spectrum.tick()
+  if self.spotify_target!=self.capture_target:
+   if self.capture.state()!=QProcess.NotRunning:
+    self.capture.kill()
+    return
+   self.capture_target=self.spotify_target
+   self.spectrum.reset()
+   self.next_capture=0.
+  if self.capture.state()==QProcess.NotRunning:
+   if self.spotify_target and time.monotonic()>=self.next_capture:self.start_capture()
+   elif not self.spotify_target:self.audio_status='Waiting for Spotify audio'
+  self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
   self.sync_timer.stop()
@@ -109,10 +138,11 @@ class Dashboard(QWidget):
 
  def poll(self):
   while True:
+   self.spotify_target=self.discover_spotify()
    def cmd(a):
     try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
     except Exception:return ''
-   gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
+   gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','--player=spotify','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
  def keyPressEvent(self,e):
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
@@ -142,6 +172,7 @@ class Dashboard(QWidget):
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
   text(70,95,1100,35,'GAME SYNC  /  '+mode+'  •  '+str(sync.get('playlist','Waiting')),17,accent)
   p.setPen(Qt.NoPen);p.setBrush(QColor('#39253e'));p.drawRoundedRect(QRectF(1300,99,550,40),8,8);text(1320,99,510,40,'RGB CONTROL  /  F3',17,'#f478d7')
+  text(70,335,1100,32,self.audio_status,14,'#a982b5')
   text(70,615,1100,35,str(sync.get('scanner',self.sync_error or 'Waiting for Game Sync backend')),15,'#c393cc')
   text(70,650,1100,35,str(sync.get('rgb','RGB status unavailable'))+'  •  F2 / click for settings',15,'#a982b5')
   text(1300,640,530,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
