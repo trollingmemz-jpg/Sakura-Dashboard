@@ -48,7 +48,10 @@ class Dashboard(QWidget):
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
+  self.metadata_stop=threading.Event();self.local_art_url=''
+  threading.Thread(target=self.poll_metadata,daemon=True).start()
   threading.Thread(target=self.poll, daemon=True).start()
+  threading.Thread(target=self.poll_artwork,daemon=True).start()
   self.mobile=MobileCompanion(self)
 
  def room_worker(self):
@@ -290,16 +293,30 @@ class Dashboard(QWidget):
   if result==2:self.open_account()
   elif result==3:self.open_discord()
   elif result==4:self.open_media()
- def poll_player(self):
-  try:
+ def now_playing(self):
+  item=self.player.get('item') or {}
+  if self.track[0]!='Nothing playing' and (self.local_playing is True or self.spotify_target or not item):return self.track
+  return (item.get('name') or self.track[0],', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1])
+ def poll_metadata(self):
+  while not self.metadata_stop.is_set():
    state=self.connect.state
    if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
    else:self.player={};self.devices=[]
-   item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
    try:
-    local_url=subprocess.check_output(['playerctl','--player=spotify','metadata','mpris:artUrl'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
-    if local_url and (self.spotify_target or not url):url=local_url
-   except (OSError,subprocess.SubprocessError):pass
+    raw=subprocess.check_output(['playerctl','--player=spotify','metadata','--format','{{status}}\\n{{title}}\\n{{artist}}\\n{{mpris:artUrl}}'.replace('\\n','\n')],text=True,stderr=subprocess.DEVNULL,timeout=1).splitlines()
+    if len(raw)>=3 and raw[1]:
+     self.track=(raw[1],raw[2]);self.local_playing=raw[0]=='Playing';self.local_art_url=raw[3] if len(raw)>3 else ''
+    else:self.track=('Nothing playing','');self.local_playing=None;self.local_art_url=''
+   except (OSError,subprocess.SubprocessError):self.track=('Nothing playing','');self.local_playing=None;self.local_art_url=''
+   self.metadata_stop.wait(.25)
+ def poll_artwork(self):
+  while not self.metadata_stop.is_set():
+   self.poll_player();self.metadata_stop.wait(.35)
+ def poll_player(self):
+  try:
+   item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
+   local_url=self.local_art_url
+   if local_url and (self.local_playing is True or self.spotify_target or not url):url=local_url
    if url.startswith('https://open.spotify.com/image/'):url=url.replace('https://open.spotify.com/image/','https://i.scdn.co/image/',1)
    if url and url!=self.art_url and url.startswith(('https://','http://','file://')):
     with urllib.request.urlopen(url,timeout=4) as response:raw=response.read(4000000)
@@ -495,6 +512,7 @@ class Dashboard(QWidget):
   self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
+  self.metadata_stop.set()
   self.notifications.close()
   self.media_bridge.stop();self.discord.disconnect();self.connect.closed=True
   self.sync_timer.stop()
@@ -514,15 +532,12 @@ class Dashboard(QWidget):
   super().closeEvent(event)
 
  def poll(self):
-  while True:
+  while not self.metadata_stop.is_set():
    self.spotify_target=self.discover_spotify()
-   self.poll_player()
-   try:self.local_playing=subprocess.check_output(['playerctl','--player=spotify','status'],text=True,stderr=subprocess.DEVNULL,timeout=2).strip()=='Playing'
-   except (OSError,subprocess.SubprocessError):self.local_playing=None
    def cmd(a):
     try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
     except Exception:return ''
-   gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','--player=spotify','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
+   gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); self.metadata_stop.wait(2)
  def open_lyrics(self):
   panel=getattr(self,'lyrics_window',None)
   if panel is not None:
@@ -588,7 +603,7 @@ class Dashboard(QWidget):
   with self.editor.section(p,'artwork',QRectF(70,150,200,200)) as artwork_map:
    if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
    else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
-  item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
+  title,artist=self.now_playing()
   with self.editor.section(p,'track',QRectF(300,195,880,130)) as track_map:
    text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
   with self.editor.section(p,'playback',QRectF(300,330,880,60)) as playback_map:
