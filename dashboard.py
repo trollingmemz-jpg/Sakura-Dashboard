@@ -15,6 +15,7 @@ from feature_panels import read_profiles,profiles_panel,discord_panel
 from responsive_layout import paint_responsive
 from media_bridge import MediaBridge
 from media_page import MediaPage
+from live_lyrics import LyricsWindow
 from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
 from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
@@ -361,6 +362,7 @@ class Dashboard(QWidget):
   remove_btn.clicked.connect(remove_feature)
   for b in (install_btn,launch_btn,remove_btn):features.addWidget(b)
   mobile_heading=QLabel('Sakura Mobile');mobile_heading.setStyleSheet('font-size:20px;font-weight:bold;color:#f478d7');features.addWidget(mobile_heading)
+  lyrics_button=QPushButton('Toggle live lyrics (F5)');lyrics_button.clicked.connect(self.open_lyrics);features.addWidget(lyrics_button)
   mobile_pair=QPushButton('Pair phone / show pairing QR');mobile_pair.clicked.connect(self.mobile.show_pairing);features.addWidget(mobile_pair)
   features.addStretch();refresh_feature()
   tabs.setCurrentIndex(index)
@@ -470,6 +472,7 @@ class Dashboard(QWidget):
   self.chroma_timer.stop()
   self.chroma_socket.close()
   self.room_stop.set()
+  if getattr(self,'lyrics_window',None):self.lyrics_window.close()
   try:self.write_setting('dashboard-chroma.json',dict(enabled=False,heartbeat=time.time()))
   except OSError:pass
   if self.chroma_process and self.chroma_process.poll() is None:
@@ -490,6 +493,12 @@ class Dashboard(QWidget):
     try:return subprocess.check_output(a,text=True,stderr=subprocess.DEVNULL,timeout=2).strip()
     except Exception:return ''
    gpu=cmd(['nvidia-smi','--query-gpu=utilization.gpu,temperature.gpu','--format=csv,noheader,nounits']).split(','); temps=psutil.sensors_temperatures(); cpu=next((v.current for k,vs in temps.items() for v in vs if v.label=='Tctl'),None); self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent, f'{cpu:.0f}°C' if cpu is not None else '—', (' / '.join(x.strip() for x in gpu)+'°C') if len(gpu)==2 else '—'); t=cmd(['playerctl','--player=spotify','metadata','--format','{{title}}\n{{artist}}']).splitlines(); self.track=(t[0],t[1] if len(t)>1 else '') if t else ('Nothing playing',''); time.sleep(2)
+ def open_lyrics(self):
+  panel=getattr(self,'lyrics_window',None)
+  if panel is not None:
+   panel.close();return
+  panel=LyricsWindow(self);self.lyrics_window=panel
+  panel.destroyed.connect(lambda: setattr(self,'lyrics_window',None));panel.show()
  def keyPressEvent(self,e):
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if e.key()==Qt.Key_F4 or (e.key()==Qt.Key_Escape and self.media_page):self.open_media();return
@@ -497,6 +506,7 @@ class Dashboard(QWidget):
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
   if e.key()==Qt.Key_F2:self.bloom_menu()
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
+  if e.key()==Qt.Key_F5:self.open_lyrics()
  def mousePressEvent(self,e):
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if self.responsive():
