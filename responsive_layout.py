@@ -33,6 +33,13 @@ def paint_responsive(o):
  title=o.track[0] if local else item.get('name') or o.track[0];artist=o.track[1] if local else ', '.join(a.get('name','') for a in item.get('artists',[])) or o.track[1]
  text(pad,pad,w*.5-pad,40,'桜 / SAKURA',min(25,w*.055),accent);text(w*.5,pad,w*.5-pad,40,time.strftime('%H:%M'),min(38,w*.075),align=Qt.AlignRight)
  top=pad+56;bottom=h-pad-48;space=max(100,bottom-top)
+ lyrics=getattr(o,'lyrics_window',None)
+ notice=getattr(o,'notifications',None)
+ active=bool(notice and notice.visible())
+ cap_h=min(100,max(32,space*.19))
+ cap_gap=min(12,space*.025)
+ cap_y=bottom-30-cap_h
+ cap_rect=None
  if portrait:
   aw=min(w-2*pad,space*.34,360);ax=(w-aw)/2;ay=top
   tx=pad;ty=ay+aw+8;tw=w-2*pad
@@ -53,7 +60,14 @@ def paint_responsive(o):
  text(tx,ty+68*unit,tw,28*unit,artist,min(22*unit,tw*.07),'#c393cc')
  bw=min(48*unit,(tw-12)/3)
  for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+98*unit,bw,36*unit,label,action)
- lyrics=getattr(o,'lyrics_window',None)
+ if active:
+  if portrait or lyrics:
+   if portrait and sy+sh>cap_y-cap_gap:sh=max(1,cap_y-cap_gap-sy);vy=sy+sh+4
+   vh=max(0,min(vh,cap_y-cap_gap-vy))
+   cap_rect=QRectF(vx,cap_y,vw,cap_h)
+  else:
+   sh=max(1,min(sh,cap_y-cap_gap-sy))
+   cap_rect=QRectF(sx,cap_y,sw,cap_h)
  if lyrics:
   if portrait:
    paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh*.56),accent)
@@ -72,4 +86,6 @@ def paint_responsive(o):
  for i,(label,action) in enumerate([('Music','connections'),('Media','media'),('Discord','discord')]):button(pad+i*(bw+6),h-pad-36,bw,36,label,action)
  from bloom import paint_settings_petal
  o.hit_regions['settings']=paint_settings_petal(p,w-pad-18,h-pad-18,18,accent)
+ if notice:
+  notice.paint(p,cap_rect if cap_rect is not None else QRectF(),accent)
  p.end()
