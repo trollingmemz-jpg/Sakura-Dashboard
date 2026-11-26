@@ -68,6 +68,8 @@ def paint_responsive(o):
    bh=max(2,min(1,b)*vh);p.setPen(Qt.NoPen);p.setBrush(accent);p.drawRoundedRect(QRectF(vx+i*vw/80,vy+vh-bh,max(1,vw/80*.65),bh),2,2)
  game=o.sync_status.get('detected_game','Desktop');voice=o.discord.state.get('channel','')
  text(pad,bottom-30,w-2*pad,24,('Game: '+game)+('  •  Voice: '+voice if voice else ''),14,accent)
- bw=min(145,(w-2*pad-18)/4)
- for i,(label,action) in enumerate([('Music','connections'),('Media','media'),('Discord','discord'),('桜 Settings','settings')]):button(pad+i*(bw+6),h-pad-36,bw,36,label,action)
+ bw=min(145,(w-2*pad-60)/3)
+ for i,(label,action) in enumerate([('Music','connections'),('Media','media'),('Discord','discord')]):button(pad+i*(bw+6),h-pad-36,bw,36,label,action)
+ from bloom import paint_settings_petal
+ o.hit_regions['settings']=paint_settings_petal(p,w-pad-18,h-pad-18,18,accent)
  p.end()
