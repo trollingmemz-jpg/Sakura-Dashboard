@@ -32,6 +32,9 @@ def chroma_data(now=None):
         color=data['color']
         if not isinstance(color,str) or len(color)!=7 or color[0]!='#':return None
         rgb=tuple(int(color[i:i+2],16) for i in (1,3,5))
+        # Keep the artwork hue, but remove the pastel washout on physical LEDs.
+        h,s,v=colorsys.rgb_to_hsv(*(c/255 for c in rgb))
+        if s>0.025:rgb=tuple(round(c*255) for c in colorsys.hsv_to_rgb(h,min(1.,max(.90,s*1.45)),v))
         bars=data.get('bars',[])
         if not isinstance(bars,list) or len(bars)!=80:return None
         bars=[max(0.,min(1.,float(x))) for x in bars]
