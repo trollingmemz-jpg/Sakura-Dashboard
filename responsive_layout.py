@@ -100,7 +100,7 @@ def paint_responsive(o):
  bw=min(95,(w-2*pad-60)/3)
  for i,(label,action) in enumerate([('Music','connections'),('Media','media'),('Discord','discord')]):button(pad+i*(bw+6),h-pad-36,bw,36,label,action)
  from bloom import paint_settings_petal
- o.hit_regions['settings']=paint_settings_petal(p,w-pad-18,h-pad-18,18,accent)
+ o.hit_regions['settings']=o.settings_hit=paint_settings_petal(p,w-pad-18,h-pad-18,18,accent)
  if notice:
   notice.paint(p,cap_rect if cap_rect is not None else QRectF(),accent)
  o.editor.overlay(p,accent)
