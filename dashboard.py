@@ -17,6 +17,7 @@ from media_bridge import MediaBridge
 from media_page import MediaPage
 from live_lyrics import LyricsWindow, paint_lyrics
 from desktop_notifications import Notifications
+from layout_editor import LayoutEditor
 from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
 from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
@@ -43,6 +44,7 @@ class Dashboard(QWidget):
   self.timer.start(16)
   self.load_display()
   self.notifications=Notifications(self)
+  self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
@@ -304,6 +306,7 @@ class Dashboard(QWidget):
   general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
   rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
   display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
+  edit_layout=QPushButton('Edit layout (F6)');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
   try:profile=json.loads((self.sync_root/'dashboard-rgb.json').read_text())
   except (OSError,ValueError):profile={}
   if not isinstance(profile,dict):profile={}
@@ -403,6 +406,7 @@ class Dashboard(QWidget):
   result=dlg.exec()
   if result==2:self.open_sync_settings();return
   if result==3:self.open_profiles();return
+  if result==4:self.editor.toggle();return
   if result!=QDialog.DialogCode.Accepted:return
   selected_mode=('auto','manual','off')[mode.currentIndex()]
   data=dict(mode='off' if hardware_visualiser.isChecked() else selected_mode,brightness=brightness.value())
@@ -510,6 +514,9 @@ class Dashboard(QWidget):
   self.update()
  def keyPressEvent(self,e):
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
+  if e.key()==Qt.Key_F6 or (self.editor.active and e.key()==Qt.Key_Escape):self.editor.toggle();return
+  if self.editor.active and e.key()==Qt.Key_R:self.editor.reset();return
+  if self.editor.active and e.key() not in (Qt.Key_F5,Qt.Key_F11):return
   if e.key()==Qt.Key_F4 or (e.key()==Qt.Key_Escape and self.media_page):self.open_media();return
   if e.key()==Qt.Key_Escape:self.close()
   if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
@@ -517,6 +524,9 @@ class Dashboard(QWidget):
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
   if e.key()==Qt.Key_F5:self.open_lyrics()
  def mousePressEvent(self,e):
+  if self.editor.active:
+   if e.button()==Qt.MouseButton.LeftButton:self.editor.press(e.position())
+   return
   if e.button()==Qt.MouseButton.LeftButton and self.notifications.hit.contains(e.position()):
    self.notifications.dismiss();self.update();return
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
@@ -535,20 +545,25 @@ class Dashboard(QWidget):
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
   elif 1120<=x<=1260 and 640<=y<=695:self.open_media()
   elif math.hypot(x-1850,y-665)<32:self.bloom_menu()
-  elif 300<=x<=370 and 330<=y<=390:self.command('previous')
-  elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.playing() else 'play')
-  elif 460<=x<=530 and 330<=y<=390:self.command('next')
-  elif 550<=x<=1180 and 330<=y<=390:self.open_player()
+  else:
+   for action,rect in self.hit_regions.items():
+    if rect.contains(e.position()):
+     if action=='connections':self.open_player()
+     else:self.command(('pause' if self.playing() else 'play') if action=='toggle' else action)
+     return
   super().mousePressEvent(e)
  def mouseMoveEvent(self,e):
+  if self.editor.move(e.position()):return
   if self.circle_points:self.circle_points.append((e.position().x()*1920/max(1,self.width()),e.position().y()*720/max(1,self.height())))
  def mouseReleaseEvent(self,e):
+  if self.editor.release():return
   pts=self.circle_points;self.circle_points=[]
   if len(pts)<12:return
   cx=sum(x for x,y in pts)/len(pts);cy=sum(y for x,y in pts)/len(pts);r=[math.hypot(x-cx,y-cy) for x,y in pts];avg=sum(r)/len(r)
   angles=[math.atan2(y-cy,x-cx) for x,y in pts];travel=sum(math.atan2(math.sin(b-a),math.cos(b-a)) for a,b in zip(angles,angles[1:]))
   if 65<avg<280 and abs(travel)>5.35 and max(r)-min(r)<avg*.85 and math.dist(pts[0],pts[-1])<avg*.5:self.bloom_menu()
  def paintEvent(self,e):
+  self.editor.begin()
   target=self.theme_target()
   if self.responsive():
    self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self)
@@ -559,34 +574,44 @@ class Dashboard(QWidget):
   p.setPen(Qt.NoPen)
   for i,(x,y,v) in enumerate(self.petals if (self.game_profile.get('petals') if self.game_profile.get('petals') is not None else self.display_options.get('petals',True)) else []):
    petal=QColor(self.accent);petal.setAlpha(45);p.setBrush(petal);p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
-  text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500);text(1300,14,550,76,time.strftime('%H:%M'),46)
-  if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
-  else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
+  text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500)
+  with self.editor.section(p,'clock',QRectF(1300,14,550,76)):
+   text(1300,14,550,76,time.strftime('%H:%M'),46)
+  with self.editor.section(p,'artwork',QRectF(70,150,200,200)) as artwork_map:
+   if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
+   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
   item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
-  text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
-  p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
-  for x,direction in ((335,-1),(495,1)):
-   path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
-  if self.playing():
-   p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
-  else:
-   path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
-  text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
+  with self.editor.section(p,'track',QRectF(300,195,880,130)) as track_map:
+   text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
+  with self.editor.section(p,'playback',QRectF(300,330,880,60)) as playback_map:
+   p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
+   for x,direction in ((335,-1),(495,1)):
+    path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
+   if self.playing():
+    p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
+   else:
+    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
+   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
+  self.hit_regions={a:playback_map.mapRect(QRectF(*r)) for a,r in [('previous',(300,330,70,60)),('toggle',(380,330,70,60)),('next',(460,330,70,60)),('connections',(550,330,630,60))]}
   lyrics=getattr(self,'lyrics_window',None)
   notice_active=self.notifications.visible()
-  if lyrics:paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
-  for i,b in enumerate(self.bars):
-   base=505 if lyrics and notice_active else 600;h=max(2,min(1,b)*(95 if lyrics and notice_active else 190));c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,base-h,5,h),2,2)
+  if lyrics:
+   with self.editor.section(p,'lyrics',QRectF(1270,135,600,310)):
+    paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
+  with self.editor.section(p,'visualiser',QRectF(70,410,1080,190)) as visualiser_map:
+   for i,b in enumerate(self.bars):
+    base=505 if lyrics and notice_active else 600;h=max(2,min(1,b)*(95 if lyrics and notice_active else 190));c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,base-h,5,h),2,2)
   import re
   gpu=re.match(r'\s*(\d+(?:\.\d+)?)\s*/\s*(.*)',str(self.stats[3]))
   entries=[('CPU',self.stats[0],self.stats[2]),('GPU',float(gpu.group(1)) if gpu else None,gpu.group(2) if gpu else ''),('MEMORY',self.stats[1],'')]
-  for i,(label,value,detail) in enumerate(entries):
-   y=(460 if lyrics else 220)+i*(48 if lyrics else 72)
-   text(1300,y,160,30,label,15,'#a982b5')
-   reading=(f'{value:.0f}%' if value is not None else '—')+('  ·  '+str(detail) if detail and detail!='—' else '')
-   text(1480,y,350,30,reading,20)
-   p.fillRect(QRectF(1300,y+34,500,2),QColor('#352b40'))
-   if value is not None:p.fillRect(QRectF(1300,y+34,5*max(0,min(100,value)),2),self.accent)
+  with self.editor.section(p,'resources',QRectF(1300,(460 if lyrics else 220),530,(135 if lyrics else 180))) as resources_map:
+   for i,(label,value,detail) in enumerate(entries):
+    y=(460 if lyrics else 220)+i*(48 if lyrics else 72)
+    text(1300,y,160,30,label,15,'#a982b5')
+    reading=(f'{value:.0f}%' if value is not None else '—')+('  ·  '+str(detail) if detail and detail!='—' else '')
+    text(1480,y,350,30,reading,20)
+    p.fillRect(QRectF(1300,y+34,500,2),QColor('#352b40'))
+    if value is not None:p.fillRect(QRectF(1300,y+34,5*max(0,min(100,value)),2),self.accent)
   sync=self.sync_status
   text(70,605,1100,30,('Game: '+sync.get('detected_game','Desktop') if sync.get('detected_game','Desktop')!='Desktop' else '')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),13,'#a982b5')
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
@@ -599,6 +624,7 @@ class Dashboard(QWidget):
   slot=p.transform().mapRect(slot)
   p.resetTransform();self.notifications.paint(p,slot,self.accent)
   p.scale(self.width()/1920,self.height()/720)
+  self.editor.overlay(p,self.accent)
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
