@@ -1,6 +1,6 @@
 import math,time
 from PySide6.QtCore import Qt,QTimer,QPointF,QRectF,QEvent
-from PySide6.QtGui import QPainter,QPainterPath,QColor,QPen,QLinearGradient,QRadialGradient,QFont,QTransform
+from PySide6.QtGui import QPainter,QPainterPath,QColor,QPen,QLinearGradient,QRadialGradient,QFont,QTransform,QPainterPathStroker
 from inline_panel import InlinePanel
 
 class Bloom(InlinePanel):
@@ -16,6 +16,7 @@ class Bloom(InlinePanel):
   self.path=QPainterPath();self.path.moveTo(0,74)
   self.path.cubicTo(-28,46,-63,6,-63,-29);self.path.cubicTo(-63,-65,-25,-79,0,-63)
   self.path.cubicTo(25,-79,63,-65,63,-29);self.path.cubicTo(63,6,28,46,0,74);self.path.closeSubpath()
+  stroke=QPainterPathStroker();stroke.setWidth(12);self.hit_path=self.path.united(stroke.createStroke(self.path))
  def fit(self):
   side=max(1,min(int(self.host.height()*.61),int(self.host.width()*.85)))
   self.setGeometry((self.host.width()-side)//2,(self.host.height()-side)//2,side,side)
@@ -31,47 +32,50 @@ class Bloom(InlinePanel):
   if obj is self.host and event.type()==QEvent.Type.MouseButtonPress and self.isVisible():
    self.dismiss();return True
   return super().eventFilter(obj,event)
+ def geometry_at(self,i,elapsed):
+  n=len(self.labels);step=.27 if n==5 else .16
+  t=max(0,min(1,(elapsed-i*step)/step))
+  if self.closing is not None:t=1-max(0,min(1,(time.monotonic()-self.closing-(n-1-i)*.045)/.12))
+  u=(1-math.cos(math.pi*t))/2;a=-math.pi/2+i*2*math.pi/n
+  b=a-(1-u)*2*math.pi/n if i else a
+  x=65*math.cos(b)*(1 if i else u);y=65*math.sin(b)*(1 if i else u)
+  rot=(i-1+u)*360/n if i else 0
+  scale=1 if i else .2+.8*u
+  return t,x,y,rot,scale
+ def hit(self,p,elapsed):
+  if p is None or math.hypot(p.x(),p.y())<30:return -1
+  # Use the same animated geometry as the painter, with a small forgiving margin.
+  for j in range(len(self.labels)-1,-1,-1):
+   t,x,y,rot,scale=self.geometry_at(j,elapsed)
+   if t<=0:continue
+   tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
+   inv,valid=tr.inverted()
+   if valid and self.hit_path.contains(inv.map(p)):return j
+  return -1
  def mousePressEvent(self,e):
   if self.closing is not None:return
-  p=self.coords(e);r=math.hypot(p.x(),p.y())
-  if r<30:self.dismiss();return
-  if time.monotonic()-self.started>=1.35:
-   for j in range(len(self.labels)-1,-1,-1):
-    angle=-math.pi/2+j*2*math.pi/len(self.labels)
-    tr=QTransform();tr.translate(65*math.cos(angle),65*math.sin(angle));tr.rotate(j*360/len(self.labels))
-    inv,valid=tr.inverted()
-    if valid and self.path.contains(inv.map(p)):
-     self.choice=j;self.closing=time.monotonic();return
-  self.dismiss()
+  if e.button()!=Qt.MouseButton.LeftButton:return
+  p=self.coords(e)
+  self.choice=self.hit(p,time.monotonic()-self.started)
+  if self.choice<0:self.dismiss()
+  else:self.closing=time.monotonic();self.update()
+  e.accept()
  def paintEvent(self,e):
   p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing)
   p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
   elapsed=time.monotonic()-self.started
   if self.closing is not None and time.monotonic()-self.closing>=.30:
    QTimer.singleShot(0,lambda:self.done(self.choice+2 if self.choice>=0 else 0));return
+  primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
   for i,label in enumerate(self.labels):
-   t=max(0,min(1,(elapsed-i*.27)/.27))
-   if self.closing is not None:t=1-max(0,min(1,(time.monotonic()-self.closing-(len(self.labels)-1-i)*.045)/.12))
+   t,x,y,rot,scale=self.geometry_at(i,elapsed)
    if t<=0:continue
-   u=(1-math.cos(math.pi*t))/2;a=-math.pi/2+i*2*math.pi/len(self.labels)
-   b=a-(1-u)*2*math.pi/len(self.labels) if i else a
-   x=65*math.cos(b)*(1 if i else u);y=65*math.sin(b)*(1 if i else u)
-   rot=(i-1+u)*360/len(self.labels) if i else 0
-   p.save();p.translate(x,y);p.rotate(rot);p.scale(1 if i else .2+.8*u,1 if i else .2+.8*u)
+   p.save();p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
    g=QLinearGradient(0,74,0,-74);g.setColorAt(0,QColor('#1d1126'));g.setColorAt(1,QColor('#3a223b'))
    p.setBrush(g);p.setPen(QPen(self.accent.darker(210),.8));p.drawPath(self.path)
    if self.cursor is not None:
     dx=self.cursor.x();dy=self.cursor.y();r=math.hypot(dx,dy)
     theta=math.radians(rot);lx=(dx-x)*math.cos(theta)+(dy-y)*math.sin(theta);ly=-(dx-x)*math.sin(theta)+(dy-y)*math.cos(theta)
-    # Resolve hover in actual paint order, so overlapping petals cannot both be primary.
-    primary=-1
-    if r>30 and elapsed>=1.35 and self.closing is None:
-     for j in range(4,-1,-1):
-      angle=-math.pi/2+j*2*math.pi/len(self.labels)
-      tr=QTransform();tr.translate(65*math.cos(angle),65*math.sin(angle));tr.rotate(j*360/len(self.labels))
-      inv,valid=tr.inverted()
-      if valid and self.path.contains(inv.map(self.cursor)):
-       primary=j;break
     if primary>=0:
      p.save();p.setClipPath(self.path);p.setPen(Qt.PenStyle.NoPen)
      if i==primary:
@@ -86,8 +90,9 @@ class Bloom(InlinePanel):
      p.restore()
    p.restore()
   for i,label in enumerate(self.labels):
-   if elapsed<(i+1)*.27:continue
-   if self.closing is not None and time.monotonic()-self.closing>(4-i)*.045:continue
+   step=.27 if len(self.labels)==5 else .16
+   if elapsed<(i+1)*step:continue
+   if self.closing is not None and time.monotonic()-self.closing>(len(self.labels)-1-i)*.045:continue
    a=-math.pi/2+i*2*math.pi/len(self.labels);x=92*math.cos(a);y=92*math.sin(a)
    font=QFont('Sans Serif')
    font.setPixelSize(11 if len(label)>12 else 13)
@@ -97,7 +102,7 @@ class Bloom(InlinePanel):
    color=QColor('#f1ddec')
    if self.cursor is not None and math.hypot(self.cursor.x()-x,self.cursor.y()-y)<38:
     color=QColor(self.accent).lighter(135)
-   color.setAlphaF(max(0.,min(1.,(elapsed-(i+1)*.27)/.16)))
+   color.setAlphaF(max(0.,min(1.,(elapsed-(i+1)*step)/.16)))
    p.setPen(color)
    p.drawText(QRectF(x-49,y-22,98,44),Qt.AlignmentFlag.AlignCenter|Qt.TextFlag.TextWordWrap,label)
   p.setBrush(QColor('#160e20'));p.setPen(QPen(self.accent,1));p.drawEllipse(QPointF(0,0),30,30)
