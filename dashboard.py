@@ -35,12 +35,12 @@ class Dashboard(QWidget):
   self.capture.readyReadStandardError.connect(self.audio_error)
   self.audio_timer = QTimer(self)
   self.audio_timer.timeout.connect(self.update_spectrum)
-  self.audio_timer.start(50)
+  self.audio_timer.setTimerType(Qt.TimerType.PreciseTimer);self.audio_timer.start(33)
   self.timer = QTimer(self)
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
-  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.start(100);self.publish_chroma()
+  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(33);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
   self.mobile=MobileCompanion(self)
@@ -422,6 +422,9 @@ class Dashboard(QWidget):
   self.chroma_timer.stop()
   try:self.write_setting('dashboard-chroma.json',dict(enabled=False,heartbeat=time.time()))
   except OSError:pass
+  if self.chroma_process and self.chroma_process.poll() is None:
+   try:self.chroma_process.wait(timeout=.8)
+   except subprocess.TimeoutExpired:self.chroma_process.terminate()
   if self.capture.state() != QProcess.NotRunning:
    self.capture.kill()
    self.capture.waitForFinished(500)
