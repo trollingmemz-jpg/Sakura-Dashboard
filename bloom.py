@@ -74,3 +74,23 @@ class Bloom(InlinePanel):
    p.setFont(QFont('Sans Serif',10));p.setPen(QColor('#f1ddec'));p.drawText(QRectF(x-48,y-12,96,24),Qt.AlignmentFlag.AlignCenter,label)
   p.setBrush(QColor('#160e20'));p.setPen(QPen(self.accent,1));p.drawEllipse(QPointF(0,0),30,30)
   p.setFont(QFont('Sans Serif',22));p.setPen(self.accent);p.drawText(QRectF(-30,-30,60,60),Qt.AlignmentFlag.AlignCenter,'桜')
+
+def paint_settings_petal(p,x,y,r,accent):
+ """Compact outlined blossom, with no surrounding box or circle."""
+ p.save()
+ p.translate(x,y)
+ p.scale(r/18,r/18)
+ p.setPen(QPen(QColor(accent),1.15))
+ p.setBrush(Qt.BrushStyle.NoBrush)
+ petal=QPainterPath()
+ petal.moveTo(0,-2)
+ petal.cubicTo(-8,-5,-10,-13,-4,-16)
+ petal.quadTo(-1,-18,0,-14)
+ petal.quadTo(1,-18,4,-16)
+ petal.cubicTo(10,-13,8,-5,0,-2)
+ petal.closeSubpath()
+ for i in range(5):
+  p.drawPath(petal)
+  p.rotate(72)
+ p.restore()
+ return QRectF(x-r-5,y-r-5,2*r+10,2*r+10)
