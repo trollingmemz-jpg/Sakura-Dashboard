@@ -134,6 +134,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.reply(404)
         try:
             self.reply(200,status())
+            (ROOT/'paired').touch()
         except Exception:
             self.reply(503)
     def do_POST(self):
@@ -160,6 +161,7 @@ def main():
     parser.add_argument('--host',required=True,help='PC LAN IPv4 address (not 0.0.0.0)')
     parser.add_argument('--mac',required=True,help='Wake-on-LAN adapter MAC address')
     parser.add_argument('--port',type=int,default=8743)
+    parser.add_argument('--pair-json',action='store_true',help='Output pairing JSON locally then exit')
     parser.add_argument('--pair',action='store_true',help='Display pairing QR locally then exit')
     args=parser.parse_args()
     import ipaddress
@@ -179,6 +181,9 @@ def main():
     token=tokenfile.read_text().strip()
     fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert.read_text())).hexdigest()
     pairing=json.dumps({'version':1,'host':args.host,'port':args.port,'fingerprint':fingerprint,'token':token,'mac':args.mac})
+    if args.pair_json:
+        print(pairing)
+        return
     if args.pair:
         try:
             subprocess.run(['qrencode','-t','ANSIUTF8'],input=pairing,text=True,check=True)
