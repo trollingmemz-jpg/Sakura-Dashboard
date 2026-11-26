@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements-windows.txt
-      - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py windows_media.py windows_update.py feature_panels.py discord_connection.py responsive_layout.py game_sync
+      - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py windows_media.py windows_update.py feature_panels.py discord_connection.py responsive_layout.py layout_editor.py desktop_notifications.py windows_notifications.py live_lyrics.py game_sync
       - name: Stamp build version
         shell: pwsh
         run: Set-Content -Path build-id.txt -Value '${{ github.run_id }}' -Encoding ascii
