@@ -9,6 +9,7 @@ import urllib.request
 from bloom import Bloom
 from spotify_connect import Connect
 from inline_panel import InlinePanel
+from mobile_panel import MobileCompanion
 from discord_connection import DiscordConnection
 from feature_panels import read_profiles,profiles_panel,discord_panel
 from responsive_layout import paint_responsive
@@ -41,6 +42,7 @@ class Dashboard(QWidget):
   self.load_display()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
+  self.mobile=MobileCompanion(self)
 
  def refresh_profile(self):
   name=self.sync_status.get('detected_game','Desktop');profile=read_profiles(self.sync_root).get(name,{})
@@ -271,6 +273,8 @@ class Dashboard(QWidget):
    if QMessageBox.question(dlg,'Uninstall Sakura Lighting','Close Sakura Lighting first. Remove its application files? Your saved profile will be retained.')==QMessageBox.StandardButton.Yes:manage_feature('--uninstall')
   remove_btn.clicked.connect(remove_feature)
   for b in (install_btn,launch_btn,remove_btn):features.addWidget(b)
+  mobile_heading=QLabel('Sakura Mobile');mobile_heading.setStyleSheet('font-size:20px;font-weight:bold;color:#f478d7');features.addWidget(mobile_heading)
+  mobile_pair=QPushButton('Pair phone / show pairing QR');mobile_pair.clicked.connect(self.mobile.show_pairing);features.addWidget(mobile_pair)
   features.addStretch();refresh_feature()
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
