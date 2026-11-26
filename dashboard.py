@@ -16,6 +16,7 @@ from responsive_layout import paint_responsive
 from media_bridge import MediaBridge
 from media_page import MediaPage
 from live_lyrics import LyricsWindow, paint_lyrics
+from desktop_notifications import Notifications
 from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
 from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
@@ -41,6 +42,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.notifications=Notifications(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
@@ -193,7 +195,13 @@ class Dashboard(QWidget):
     subprocess.Popen(['bash',str(Path(__file__).resolve().parent/'run.sh')],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     dlg.accept();self.close()
    except OSError as e:log.setText(str(e))
-  for label,fn in [('Restart Game Sync',restart),('Check for updates and relaunch',relaunch),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  def history():
+   panel=InlinePanel(self);panel.setWindowTitle('Notifications');items=QVBoxLayout(panel)
+   toggle=QCheckBox('Mirror desktop notifications');toggle.setChecked(self.notifications.enabled);toggle.toggled.connect(lambda value:setattr(self.notifications,'enabled',value));items.addWidget(toggle)
+   for app,title,body,stamp in self.notifications.history:
+    label=QLabel(time.strftime('%H:%M',time.localtime(stamp))+'  ·  '+app+'\n'+title+'\n'+body);label.setTextFormat(Qt.TextFormat.PlainText);label.setWordWrap(True);items.addWidget(label)
+   panel.exec()
+  for label,fn in [('Notifications',history),('Restart Game Sync',restart),('Check for updates and relaunch',relaunch),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();dlg.exec();timer.stop()
  def open_account(self):
@@ -466,6 +474,7 @@ class Dashboard(QWidget):
   self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
+  self.notifications.close()
   self.media_bridge.stop();self.discord.disconnect();self.connect.closed=True
   self.sync_timer.stop()
   self.audio_timer.stop()
@@ -508,6 +517,8 @@ class Dashboard(QWidget):
   if e.key()==Qt.Key_F3:self.open_rgb_settings()
   if e.key()==Qt.Key_F5:self.open_lyrics()
  def mousePressEvent(self,e):
+  if e.button()==Qt.MouseButton.LeftButton and self.notifications.hit.contains(e.position()):
+   self.notifications.dismiss();self.update();return
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if self.responsive():
    for action,rect in self.hit_regions.items():
@@ -540,7 +551,8 @@ class Dashboard(QWidget):
  def paintEvent(self,e):
   target=self.theme_target()
   if self.responsive():
-   self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self);return
+   self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self)
+   p=QPainter(self);self.notifications.paint(p,QRectF(self.width()*.29,8,self.width()*.40,74),self.accent);p.end();return
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.game_profile or self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
    p.setPen(QColor(color));f=QFont('Sans Serif',size);f.setWeight(QFont.Weight(weight));p.setFont(f);p.drawText(QRectF(x,y,w,h),Qt.AlignVCenter|Qt.AlignLeft,p.fontMetrics().elidedText(str(s),Qt.ElideRight,int(w)))
@@ -582,6 +594,8 @@ class Dashboard(QWidget):
   text(1120,640,140,45,'MEDIA ↗',18,self.accent)
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
   paint_settings_petal(p,1850,665,22,self.accent)
+  p.resetTransform();self.notifications.paint(p,QRectF(self.width()*.29,8,self.width()*.40,74),self.accent)
+  p.scale(self.width()/1920,self.height()/720)
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
