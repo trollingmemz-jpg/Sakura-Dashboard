@@ -59,9 +59,13 @@ class LayoutEditor:
         finally:p.restore()
     def press(self,pos):
         if not self.active:return False
-        for name,r in reversed(list(self.regions.items())):
+        ordered=list(reversed(list(self.regions.items())))
+        # Prefer visible resize handles, then the smallest overlapping section.
+        handles=[(name,r) for name,r in ordered if QRectF(r.right()-9,r.bottom()-9,18,18).contains(pos)]
+        bodies=sorted(ordered,key=lambda item:item[1].width()*item[1].height())
+        for name,r in handles+bodies:
             if r.adjusted(-5,-5,5,5).contains(pos):
-                corner=QRectF(r.right()-13,r.bottom()-13,26,26)
+                corner=QRectF(r.right()-9,r.bottom()-9,18,18)
                 self.selected=name
                 self.drag=(name,QPointF(pos),QRectF(r),corner.contains(pos),self.key())
                 return True
@@ -70,7 +74,9 @@ class LayoutEditor:
     def move(self,pos):
         if not self.active:return False
         if not self.drag:return True
-        name,start,r,resize,key=self.drag
+        name,start,original,resize,key=self.drag
+        # Always calculate from the immutable press-time geometry, never the previous frame.
+        r=QRectF(original)
         if key!=self.key():self.drag=None;return True
         w,h=max(1,self.host.width()),max(1,self.host.height())
         dx,dy=pos.x()-start.x(),pos.y()-start.y()
@@ -89,7 +95,7 @@ class LayoutEditor:
                 candidates=[(abs(value+off-line),line-off,line) for line in coords for off in offsets if 0<=line-off<=limit]
                 if candidates:
                     distance,new,line=min(candidates)
-                    if distance<=8:
+                    if distance<=4:
                         if axis=='x':x=new
                         else:y=new
                         self.guides.append((axis,line))
