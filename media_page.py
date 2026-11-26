@@ -8,8 +8,9 @@ from media_library import clean_url
 class MediaPage(QWidget):
  def __init__(self,owner):
   super().__init__(owner);self.owner=owner;self.bridge=owner.media_bridge;self.progress=0.;self.closing=False;self.ready=False;self.result=[];self.busy=False
-  self.setStyleSheet('QWidget{background:#201329;color:#f5d9ef} QPushButton,QListWidget{background:#39253e;color:#f5d9ef;padding:7px;border-radius:5px} QLabel{background:transparent}')
+  self.setAttribute(Qt.WA_TranslucentBackground,True);self.setStyleSheet('QWidget{color:#f5d9ef} QPushButton,QListWidget{background:#39253e;color:#f5d9ef;padding:7px;border-radius:5px} QLabel{background:transparent}')
   self.library=QWidget(self);self.discovery=QWidget(self)
+  for panel in (self.library,self.discovery):panel.setAttribute(Qt.WA_StyledBackground,True);panel.setStyleSheet('background:#201329')
   a=QVBoxLayout(self.library);header=QHBoxLayout();header.addWidget(QLabel('桜  /  MEDIA LIBRARY'));header.addStretch()
   close=QPushButton('Fold away');close.clicked.connect(self.fold);header.addWidget(close);a.addLayout(header)
   self.private=QCheckBox('Enable tracking and reveal history');self.private.setChecked(self.bridge.enabled);a.addWidget(self.private)
@@ -23,13 +24,13 @@ class MediaPage(QWidget):
    widget=QListWidget();widget.setWordWrap(True);widget.itemDoubleClicked.connect(lambda _:self.resume());self.tabs.addTab(widget,label);self.lists[kind]=widget
   a.addWidget(self.tabs)
   b=QVBoxLayout(self.discovery);b.addWidget(QLabel('DISCOVER'))
-  self.hint=QLabel('Optional: query AniList for recommendations using title and genre metadata.');self.hint.setWordWrap(True);b.addWidget(self.hint)
+  self.hint=QLabel('Optional: send the most recent media title to AniList to find related titles.');self.hint.setWordWrap(True);b.addWidget(self.hint)
   recommend=QPushButton('Find recommendations');recommend.clicked.connect(self.recommend);b.addWidget(recommend)
   self.recs=QListWidget();self.recs.setWordWrap(True);self.recs.itemDoubleClicked.connect(self.open_recommendation);b.addWidget(self.recs)
   self.private.toggled.connect(self.privacy)
   self.animation=QVariantAnimation(self);self.animation.setDuration(400);self.animation.setEasingCurve(QEasingCurve.InOutSine);self.animation.valueChanged.connect(self.frame);self.animation.finished.connect(self.finished)
   self.timer=QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(2000)
-  self.refresh();self.fit();self.library.hide();self.discovery.hide();self.show();self.raise_();self.animation.setStartValue(0.);self.animation.setEndValue(1.);self.animation.start()
+  self.refresh();self.fit();self.snapshots=[panel.grab() for panel in (self.library,self.discovery)];self.library.hide();self.discovery.hide();self.show();self.raise_();self.animation.setStartValue(0.);self.animation.setEndValue(1.);self.animation.start()
  def fit(self):
   w,h=self.owner.width(),self.owner.height();self.setGeometry(0,0,w,h)
   hinge=max(50,int(h*.19));middle=int((h-hinge)*.57);self.hinge=hinge
@@ -41,7 +42,7 @@ class MediaPage(QWidget):
   else:self.ready=True;self.library.show();self.discovery.show();self.update()
  def fold(self):
   if self.closing:return
-  self.closing=True;self.ready=False;self.library.hide();self.discovery.hide();self.animation.stop();self.animation.setStartValue(self.progress);self.animation.setEndValue(0.);self.animation.start()
+  self.closing=True;self.ready=False;self.snapshots=[panel.grab() for panel in (self.library,self.discovery)];self.library.hide();self.discovery.hide();self.animation.stop();self.animation.setStartValue(self.progress);self.animation.setEndValue(0.);self.animation.start()
  def paintEvent(self,e):
   if self.ready:return
   p=QPainter(self);p.setRenderHint(QPainter.Antialiasing);p.setClipRect(QRectF(0,self.hinge,self.width(),self.height()-self.hinge))
@@ -54,7 +55,7 @@ class MediaPage(QWidget):
    yy=y+length*math.cos(angle);zz=z+length*math.sin(angle)
    quad=QPolygonF([project(0,y,z),project(w,y,z),project(w,yy,zz),project(0,yy,zz)])
    if math.cos(angle)>0 and length>0:
-    pix=widget.grab();src=QPolygonF([QPointF(0,0),QPointF(pix.width(),0),QPointF(pix.width(),pix.height()),QPointF(0,pix.height())])
+    pix=self.snapshots[i] if hasattr(self,'snapshots') else widget.grab();src=QPolygonF([QPointF(0,0),QPointF(pix.width(),0),QPointF(pix.width(),pix.height()),QPointF(0,pix.height())])
     transform=QTransform()
     if QTransform.quadToQuad(src,quad,transform):
      p.save();p.setTransform(transform);p.drawPixmap(0,0,pix);p.fillRect(QRectF(0,0,pix.width(),pix.height()),QColor(0,0,0,int(85*(1-t))));p.restore()
