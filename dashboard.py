@@ -47,29 +47,33 @@ class Dashboard(QWidget):
   self.mobile=MobileCompanion(self)
 
  def room_worker(self):
-  last=None;last_at=0.;previous=None
+  last={};last_at=0.;previous=None
   while not self.room_stop.wait(.3):
    pending=self.room_pending
-   if pending is None:last=None;previous=None;continue
-   color,device=pending
+   if pending is None:last.clear();previous=None;continue
+   color,devices=pending
    if previous is None:previous=color
    previous=tuple(a+(b-a)*.35 for a,b in zip(previous,color))
    rgb=tuple(round(v) for v in previous)
-   if last is not None and last[0]==device and max(abs(a-b) for a,b in zip(rgb,last[1]))<5:continue
    if time.monotonic()-last_at<.5:continue
-   last_at=time.monotonic()
-   try:
-    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-     client.settimeout(2);client.connect(str(Path.home()/'.local/run/lightctl/lightctl.sock'))
-     client.sendall(json.dumps(dict(action='set_rgb',device=device,r=rgb[0],g=rgb[1],b=rgb[2])).encode());reply=json.loads(client.recv(65536).decode())
-    if not reply.get('ok'):raise RuntimeError(str(reply.get('error','Lightctl rejected command')))
-    last=(device,rgb);self.room_status='Room sync active — '+device
-   except (OSError,ValueError,RuntimeError) as e:self.room_status='Lightctl: '+str(e)
+   last_at=time.monotonic();errors=[]
+   for device in devices:
+    if self.room_pending is None or self.room_stop.is_set():break
+    if device in last and max(abs(a-b) for a,b in zip(rgb,last[device]))<5:continue
+    try:
+     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+      client.settimeout(2);client.connect(str(Path.home()/'.local/run/lightctl/lightctl.sock'))
+      client.sendall(json.dumps(dict(action='set_rgb',device=device,r=rgb[0],g=rgb[1],b=rgb[2])).encode());reply=json.loads(client.recv(65536).decode())
+     if not reply.get('ok'):raise RuntimeError(str(reply.get('error','Lightctl rejected command')))
+     last[device]=rgb
+    except (OSError,ValueError,RuntimeError,AttributeError) as e:errors.append(device+': '+str(e))
+   self.room_status='Lightctl: '+'; '.join(errors) if errors else 'Room sync active — '+', '.join(devices)
  def publish_chroma(self):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
   room_enabled=bool(self.display_options.get('room_sync',False) and self.display_options.get('album_theme',False) and self.art_url)
-  self.room_pending=(tuple(QColor(color).getRgb()[:3]),self.display_options.get('room_device','bulb')) if room_enabled else None
+  room_devices=tuple(dict.fromkeys(n.strip() for n in str(self.display_options.get('room_device','bulb,cupboard')).split(',') if n.strip()))
+  self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices) if room_enabled and room_devices else None
   if not room_enabled:self.room_status='Room sync disabled / waiting for album artwork'
   try:
    payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30))
@@ -322,7 +326,7 @@ class Dashboard(QWidget):
   chroma_effect=QComboBox();chroma_effect.addItems(['Spectrum','Bass shockwave','Ambient flow','Album palette','Automatic']);chroma_effect.setCurrentText(view.get('chroma_effect','Spectrum'));features.addWidget(QLabel('Media lighting effect'));features.addWidget(chroma_effect)
   chroma_rate=QComboBox();chroma_rate.addItems(['30 FPS — compatibility','60 FPS — low latency']);chroma_rate.setCurrentIndex(1 if view.get('chroma_rate',30)==60 else 0);features.addWidget(chroma_rate)
   room_sync=QCheckBox('Sync room lights with album artwork');room_sync.setChecked(bool(view.get('room_sync',False)));features.addWidget(room_sync)
-  room_device=QLineEdit(str(view.get('room_device','bulb')));features.addWidget(QLabel('Lightctl device name'));features.addWidget(room_device)
+  room_device=QLineEdit(str(view.get('room_device','bulb,cupboard')));features.addWidget(QLabel('Lightctl device names (comma-separated)'));features.addWidget(room_device)
   room_status=QLabel(self.room_status);room_status.setWordWrap(True);features.addWidget(room_status)
   room_timer=QTimer(dlg);room_timer.timeout.connect(lambda:room_status.setText(self.room_status));room_timer.start(500)
   chroma_adaptive=QCheckBox('Adaptive audio sensitivity');chroma_adaptive.setChecked(bool(view.get('chroma_adaptive',True)));features.addWidget(chroma_adaptive)
@@ -395,7 +399,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb'));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
