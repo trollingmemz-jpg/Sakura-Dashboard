@@ -46,6 +46,7 @@ class DiscordConnection:
     asyncio.run(run())
    except ImportError:
     if gen==self.generation:self.state={'status':'Discord module is not installed','voice':[],'messages':[]}
-   except Exception:
-    if gen==self.generation:self.state={'status':'Discord connection failed. Check bot token, permissions and intents.','voice':[],'messages':[]}
+   except Exception as exc:
+    detail=str(exc).replace(token,'[redacted]') if token else str(exc)
+    if gen==self.generation:self.state={'status':'Discord error: '+type(exc).__name__+' — '+detail[:350],'voice':[],'messages':[]}
   threading.Thread(target=work,daemon=True).start()
