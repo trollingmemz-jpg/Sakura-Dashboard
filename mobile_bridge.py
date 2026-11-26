@@ -38,6 +38,33 @@ def lighting():
         return {}
     return p
 
+def dashboard_lighting():
+    p=read(SYNC)
+    if p.get('mode') not in ('manual','auto'):
+        return {}
+    live=read(SYNC.parent/'dashboard-status.json')
+    if abs(time.time()-live.get('time',0))>5:
+        return {}
+    return p
+
+def dashboard_devices(p):
+    out={}
+    overrides=p.get('mobile_overrides',{})
+    live=read(SYNC.parent/'dashboard-status.json')
+    key='manual' if p.get('mode')=='manual' else 'combat' if live.get('combat') else 'scanning' if live.get('scanning') else 'idle'
+    defaults={'manual':[244,120,215],'combat':[240,24,134],'scanning':[179,108,255],'idle':[244,120,215]}
+    color=p.get(key,defaults[key])
+    if p.get('mode')=='auto' and key!='combat':
+        game=read(SYNC.parent/'game-profiles.json').get(live.get('detected_game','Desktop'),{})
+        if game.get('enabled') and game.get('rgb_enabled') and re.fullmatch(r'#[0-9a-fA-F]{6}',str(game.get('rgb',''))):
+            color=[int(game['rgb'][i:i+2],16) for i in (1,3,5)]
+    for device in ('keyboard','ram','mouse'):
+        if not p.get(device,True):continue
+        override=overrides.get(device,{})
+        rgb=override.get('color',color)
+        out[device]={'color':'#%02x%02x%02x'%tuple(rgb),'brightness':override.get('brightness',p.get('brightness',100))}
+    return out
+
 def optional(*args):
     try:
         return run(*args)
@@ -76,6 +103,9 @@ def status():
         d=p.get(local,{})
         if d.get('enabled'):
             out['lighting'][key]={'color':d.get('color','#000000'),'brightness':d.get('brightness',100)}
+    if not out['lighting']:
+        profile=dashboard_lighting()
+        if profile:out['lighting']=dashboard_devices(profile)
     return out
 
 def percent(value):
@@ -100,6 +130,16 @@ def command(data):
         if device not in ('keyboard','ram','mouse') or not isinstance(color,str) or not re.fullmatch(r'#[0-9a-fA-F]{6}',color):
             raise ValueError('Invalid lighting request')
         level=percent(data.get('brightness'))
+        profile=dashboard_lighting()
+        if profile:
+            if device not in dashboard_devices(profile):
+                raise RuntimeError('Lighting device disabled')
+            # Only update the selected device; retain the active controller and all other settings.
+            profile.setdefault('mobile_overrides',{})[device]={'color':[int(color[i:i+2],16) for i in (1,3,5)],'brightness':level}
+            if read(SYNC).get('mode')!=profile['mode']:
+                raise RuntimeError('Lighting ownership changed; retry')
+            atomic(SYNC,profile)
+            return
         p=lighting()
         if not p.get('ram1' if device=='ram' else device,{}).get('enabled'):
             raise RuntimeError('Lighting unavailable')
