@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Sakura Media Connector",
   "version": "0.1.0",
-  "description": "Send local anime playback status to Sakura.",
+  "description": "Opt-in local anime and manga history for Sakura",
   "permissions": [
     "storage",
     "http://127.0.0.1:8765/*"
@@ -18,7 +18,8 @@
         "https://miruro.cx/*",
         "https://*.miruro.cx/*",
         "https://miruro.tv/*",
-        "https://*.miruro.tv/*"
+        "https://*.miruro.tv/*",
+        "https://mangadex.org/*"
       ],
       "js": [
         "content.js"
