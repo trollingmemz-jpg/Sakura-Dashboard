@@ -5,6 +5,7 @@ HOME=Path.home()
 ROOT=HOME/'.local/share/sakura-lighting'
 CONFIG=HOME/'.config/sakura-lighting'
 SYNC=HOME/'.config/sakura-game-sync/dashboard-rgb.json'
+CHROMA=SYNC.with_name('dashboard-chroma.json')
 ENTRY=ROOT/'lighting.py'
 DESKTOP=HOME/'.local/share/applications/sakura-lighting.desktop'
 def install():
@@ -24,6 +25,14 @@ def released(): return read(SYNC,{}).get('mode')=='off'
 def save(path,data):
     path.parent.mkdir(parents=True,exist_ok=True)
     tmp=path.with_suffix('.tmp'); tmp.write_text(json.dumps(data,indent=2)); tmp.replace(path)
+def chroma_color(now=None):
+    data=read(CHROMA,{})
+    try:
+        if not data.get('enabled') or abs((time.time() if now is None else now)-float(data['heartbeat']))>3:return None
+        color=data['color']
+        if not isinstance(color,str) or len(color)!=7 or color[0]!='#':return None
+        return tuple(int(color[i:i+2],16) for i in (1,3,5))
+    except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
 def frame(rgb,mode,brightness,t,index=0):
     if mode=='Rainbow': rgb=tuple(round(x*255) for x in colorsys.hsv_to_rgb((t/8+index*.12)%1,1,1))
     scale=brightness/100
@@ -125,11 +134,12 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0
+        multiplier=1.0; blended={}
         while not halt.wait(.12):
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
+                blended.clear()
                 continue
             p=state['profile'];now=time.monotonic();errors=[]
             target=p.get('locked_brightness',15)/100 if state['locked'] and p.get('dim_on_lock',True) else 1.0
@@ -144,9 +154,13 @@ def main():
                     if ks:devices['keyboard']=ks[0]
                     for i,d in enumerate(rs[:2]):devices['ram'+str(i+1)]=d
                 except Exception as e:disconnect();errors.append(str(e))
+            chroma=chroma_color()
             for k in rows:
                 if not p.get(k,{}).get('enabled'):continue
-                h=p[k]['color'];rgb=frame(tuple(int(h[i:i+2],16) for i in (1,3,5)),p['mode'],p['brightness']*multiplier*p[k].get('brightness',100)/100,now)
+                h=p[k]['color'];manual=tuple(int(h[i:i+2],16) for i in (1,3,5));target_color=chroma if chroma is not None else manual
+                previous=blended.get(k,manual);base=tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
+                effect='Static' if chroma is not None and p['mode']=='Rainbow' else p['mode']
+                rgb=frame(base,effect,p['brightness']*multiplier*p[k].get('brightness',100)/100,now)
                 if last.get(k)==rgb:continue
                 try:
                     if k=='mouse':mouse_write(rgb)
@@ -158,7 +172,7 @@ def main():
                 except Exception as e:
                     errors.append(k+': '+str(e))
                     if k!='mouse':disconnect();retry=now+5
-            state['status']='Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
+            state['status']=('Chroma Sync active | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
