@@ -1,5 +1,5 @@
 """Optional read-only Discord bot integration. No user tokens, message history or disk logs."""
-import asyncio,threading
+import asyncio,threading,traceback,importlib
 class DiscordConnection:
  def __init__(self):
   self.state={'status':'Disconnected','voice':[],'messages':[]};self.client=None;self.loop=None;self.generation=0
@@ -14,7 +14,7 @@ class DiscordConnection:
   self.state={'status':'Connecting…','voice':[],'messages':[]}
   def work():
    try:
-    import discord
+    discord=importlib.import_module('discord')
     async def run():
      intents=discord.Intents.none();intents.guilds=True;intents.voice_states=True
      intents.guild_messages=bool(channel_id);intents.message_content=bool(channel_id)
@@ -34,10 +34,14 @@ class DiscordConnection:
         members.append((m.display_name if m else str(uid),bool(v.mute or v.self_mute),bool(v.deaf or v.self_deaf)))
       publish(status='Connected • '+guild.name,channel=channel.name if channel else '',voice=members)
      @client.event
-     async def on_ready():voice()
+     async def on_ready():
+      try:voice()
+      except Exception as exc:publish(status='Discord voice error: '+type(exc).__name__+' — '+str(exc).replace(token,'[redacted]'),diagnostic=traceback.format_exc().replace(token,'[redacted]'))
      @client.event
      async def on_voice_state_update(member,before,after):
-      if member.guild.id==guild_id:voice()
+      if member.guild.id==guild_id:
+       try:voice()
+       except Exception as exc:publish(status='Discord voice error: '+type(exc).__name__+' — '+str(exc).replace(token,'[redacted]'),diagnostic=traceback.format_exc().replace(token,'[redacted]'))
      @client.event
      async def on_message(message):
       if message.guild and message.guild.id==guild_id and message.channel.id==channel_id:
@@ -48,5 +52,5 @@ class DiscordConnection:
     if gen==self.generation:self.state={'status':'Discord module is not installed','voice':[],'messages':[]}
    except Exception as exc:
     detail=str(exc).replace(token,'[redacted]') if token else str(exc)
-    if gen==self.generation:self.state={'status':'Discord error: '+type(exc).__name__+' — '+detail[:350],'voice':[],'messages':[]}
+    if gen==self.generation:self.state={'status':'Discord error: '+type(exc).__name__+' — '+detail[:350],'voice':[],'messages':[],'diagnostic':traceback.format_exc().replace(token,'[redacted]')}
   threading.Thread(target=work,daemon=True).start()
