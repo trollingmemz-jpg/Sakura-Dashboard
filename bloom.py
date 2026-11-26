@@ -1,5 +1,5 @@
 import math,time
-from PySide6.QtCore import Qt,QTimer,QPointF,QRectF
+from PySide6.QtCore import Qt,QTimer,QPointF,QRectF,QEvent
 from PySide6.QtGui import QPainter,QPainterPath,QColor,QPen,QLinearGradient,QRadialGradient,QFont,QTransform
 from inline_panel import InlinePanel
 
@@ -24,13 +24,25 @@ class Bloom(InlinePanel):
   return QPointF((e.position().x()-self.width()/2)/scale,(e.position().y()-self.height()/2)/scale)
  def mouseMoveEvent(self,e):self.cursor=self.coords(e);self.update()
  def leaveEvent(self,e):self.cursor=None;self.update()
+ def dismiss(self):
+  if self.closing is None:
+   self.choice=-1;self.closing=time.monotonic();self.update()
+ def eventFilter(self,obj,event):
+  if obj is self.host and event.type()==QEvent.Type.MouseButtonPress and self.isVisible():
+   self.dismiss();return True
+  return super().eventFilter(obj,event)
  def mousePressEvent(self,e):
   if self.closing is not None:return
   p=self.coords(e);r=math.hypot(p.x(),p.y())
-  if r<30:self.choice=-1
-  elif r<140 and time.monotonic()-self.started>=1.35:self.choice=round((math.atan2(p.y(),p.x())+math.pi/2)/(2*math.pi/5))%5
-  else:return
-  self.closing=time.monotonic()
+  if r<30:self.dismiss();return
+  if time.monotonic()-self.started>=1.35:
+   for j in range(4,-1,-1):
+    angle=-math.pi/2+j*2*math.pi/5
+    tr=QTransform();tr.translate(65*math.cos(angle),65*math.sin(angle));tr.rotate(j*72)
+    inv,valid=tr.inverted()
+    if valid and self.path.contains(inv.map(p)):
+     self.choice=j;self.closing=time.monotonic();return
+  self.dismiss()
  def paintEvent(self,e):
   p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing)
   p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
