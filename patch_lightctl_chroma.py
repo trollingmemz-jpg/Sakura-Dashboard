@@ -41,7 +41,9 @@ v=change(v,'    def start(self, colour=None):','''    def sakura_frame(self, col
 
     def start(self, colour=None, external=False):''')
 v=change(v,'            if np is None:', '            self.external = external\n            if not external:\n                for ch in self.channels: ch.enabled = True\n            if np is None and not external:')
-let start=v.indexOf('            try:\n                self._proc = subprocess.Popen('), end=v.indexOf('            # Remember what each light',start);if(start<0||end<0)throw Error("patch anchor");v=v.slice(0,start)+'            if not external:\n'+v.slice(start,end).split('
+start=v.index('            try:\n                self._proc = subprocess.Popen(')
+end=v.index('            # Remember what each light',start)
+v=v[:start]+'            if not external:\n'+'\n'.join('    '+x if x else x for x in v[start:end].split('\n'))+v[end:]
 ').map(x=>x?'    '+x:x).join('
 ')+v.slice(end);
 v=change(v,'            for ch in self.channels:\n                try:\n                    ch.saved', '            for ch in self.channels:\n                if not ch.enabled: continue\n                try:\n                    ch.saved')
