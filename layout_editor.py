@@ -115,6 +115,6 @@ class LayoutEditor:
         for axis,line in self.guides:
             if axis=='x':p.drawLine(QPointF(line,0),QPointF(line,self.host.height()))
             else:p.drawLine(QPointF(0,line),QPointF(self.host.width(),line))
-        msg=self.error or 'EDIT LAYOUT  ·  Drag to move  ·  Corner to resize  ·  R reset  ·  F6 / Esc finish'
+        msg=self.error or 'EDIT LAYOUT  ·  Drag to move  ·  Corner to resize  ·  Bloom for options'
         p.setPen(accent);p.drawText(QRectF(0,self.host.height()-22,self.host.width(),20),Qt.AlignCenter,msg)
         p.restore()
