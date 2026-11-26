@@ -15,7 +15,7 @@ from feature_panels import read_profiles,profiles_panel,discord_panel
 from responsive_layout import paint_responsive
 from media_bridge import MediaBridge
 from media_page import MediaPage
-from live_lyrics import LyricsWindow
+from live_lyrics import LyricsWindow, paint_lyrics
 from PySide6.QtWidgets import QTableWidget,QTableWidgetItem,QFileDialog,QHeaderView
 from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
@@ -561,15 +561,17 @@ class Dashboard(QWidget):
    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
   lyrics=getattr(self,'lyrics_window',None)
-  if lyrics:
-   for j,line in enumerate(lyrics.current_lines()):
-    text(70,394+j*31,1100,31,line,22 if j==1 else 15,self.accent if j==1 else '#a982b5',600 if j==1 else 400)
+  if lyrics:paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
   for i,b in enumerate(self.bars):
-   h=max(3,min(1,b)*(100 if lyrics else 190));p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
+   h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
   p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
   for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
-   y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
-   if value is not None:p.fillRect(QRectF(1300,y+112,500,4),QColor('#4b294c'));p.fillRect(QRectF(1300,y+112,5*value,4),QColor('#f05aef'))
+   if lyrics:
+    y=460+i*48;text(1300,y,155,34,label,15,'#c393cc');text(1460,y,370,34,(f'{value:.0f}%  '+detail) if value is not None else detail,21)
+    if value is not None:p.fillRect(QRectF(1300,y+37,500,3),QColor('#4b294c'));p.fillRect(QRectF(1300,y+37,5*value,3),QColor('#f05aef'))
+   else:
+    y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
+    if value is not None:p.fillRect(QRectF(1300,y+112,500,4),QColor('#4b294c'));p.fillRect(QRectF(1300,y+112,5*value,4),QColor('#f05aef'))
   sync=self.sync_status
   text(70,605,1100,30,'Game: '+sync.get('detected_game','Desktop')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),15,self.accent)
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
