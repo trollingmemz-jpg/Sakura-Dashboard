@@ -551,7 +551,7 @@ class Dashboard(QWidget):
   if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
   item=self.player.get('item') or {};title=item.get('name') or self.track[0];artist=', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
-  text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
+  text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
   p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
   for x,direction in ((335,-1),(495,1)):
    path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
@@ -563,20 +563,22 @@ class Dashboard(QWidget):
   lyrics=getattr(self,'lyrics_window',None)
   if lyrics:paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
   for i,b in enumerate(self.bars):
-   h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
-  p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
-  for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
-   if lyrics:
-    y=460+i*48;text(1300,y,155,34,label,15,'#c393cc');text(1460,y,370,34,(f'{value:.0f}%  '+detail) if value is not None else detail,21)
-    if value is not None:p.fillRect(QRectF(1300,y+37,500,3),QColor('#4b294c'));p.fillRect(QRectF(1300,y+37,5*value,3),QColor('#f05aef'))
-   else:
-    y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
-    if value is not None:p.fillRect(QRectF(1300,y+112,500,4),QColor('#4b294c'));p.fillRect(QRectF(1300,y+112,5*value,4),QColor('#f05aef'))
+   h=max(2,min(1,b)*190);c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,5,h),2,2)
+  import re
+  gpu=re.match(r'\s*(\d+(?:\.\d+)?)\s*/\s*(.*)',str(self.stats[3]))
+  entries=[('CPU',self.stats[0],self.stats[2]),('GPU',float(gpu.group(1)) if gpu else None,gpu.group(2) if gpu else ''),('MEMORY',self.stats[1],'')]
+  for i,(label,value,detail) in enumerate(entries):
+   y=(460 if lyrics else 220)+i*(48 if lyrics else 72)
+   text(1300,y,160,30,label,15,'#a982b5')
+   reading=(f'{value:.0f}%' if value is not None else '—')+('  ·  '+str(detail) if detail and detail!='—' else '')
+   text(1480,y,350,30,reading,20)
+   p.fillRect(QRectF(1300,y+34,500,2),QColor('#352b40'))
+   if value is not None:p.fillRect(QRectF(1300,y+34,5*max(0,min(100,value)),2),self.accent)
   sync=self.sync_status
-  text(70,605,1100,30,'Game: '+sync.get('detected_game','Desktop')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),15,self.accent)
+  text(70,605,1100,30,('Game: '+sync.get('detected_game','Desktop') if sync.get('detected_game','Desktop')!='Desktop' else '')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),13,'#a982b5')
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
-  text(70,645,1100,35,'Sakura active' if sync else 'Game Sync offline',15,'#a982b5')
+  if not sync:text(70,645,1100,35,'Game Sync offline',13,'#a982b5')
   text(1120,640,140,45,'MEDIA ↗',18,self.accent)
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
   paint_settings_petal(p,1850,665,22,self.accent)
