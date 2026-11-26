@@ -9,3 +9,6 @@ pyinstaller>=6.11,<7
 winrt-Windows.Media.Control>=3,<4
 winrt-Windows.Storage.Streams>=3,<4
 discord.py>=2.5,<3
+winrt-Windows.UI.Notifications>=3,<4
+winrt-Windows.UI.Notifications.Management>=3,<4
+winrt-Windows.ApplicationModel>=3,<4
