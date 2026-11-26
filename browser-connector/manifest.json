@@ -1,0 +1,37 @@
+{
+  "manifest_version": 2,
+  "name": "Sakura Media Connector",
+  "version": "0.1.0",
+  "description": "Send local anime playback status to Sakura.",
+  "permissions": [
+    "storage",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://miruro.cx/*",
+        "https://*.miruro.cx/*",
+        "https://miruro.tv/*",
+        "https://*.miruro.tv/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ],
+  "browser_action": {
+    "default_title": "Sakura Media Connector",
+    "default_popup": "popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sakura-media@local.sakura"
+    }
+  }
+}
