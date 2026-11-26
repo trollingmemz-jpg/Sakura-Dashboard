@@ -5,6 +5,7 @@ HOME=Path.home()
 ROOT=HOME/'.local/share/sakura-lighting'
 CONFIG=HOME/'.config/sakura-lighting'
 SYNC=HOME/'.config/sakura-game-sync/dashboard-rgb.json'
+CHROMA=SYNC.with_name('dashboard-chroma.json')
 ENTRY=ROOT/'lighting.py'
 DESKTOP=HOME/'.local/share/applications/sakura-lighting.desktop'
 def install():
@@ -24,6 +25,28 @@ def released(): return read(SYNC,{}).get('mode')=='off'
 def save(path,data):
     path.parent.mkdir(parents=True,exist_ok=True)
     tmp=path.with_suffix('.tmp'); tmp.write_text(json.dumps(data,indent=2)); tmp.replace(path)
+def chroma_data(now=None):
+    data=read(CHROMA,{})
+    try:
+        if not data.get('enabled') or abs((time.time() if now is None else now)-float(data['heartbeat']))>3:return None
+        color=data['color']
+        if not isinstance(color,str) or len(color)!=7 or color[0]!='#':return None
+        rgb=tuple(int(color[i:i+2],16) for i in (1,3,5))
+        bars=data.get('bars',[])
+        if not isinstance(bars,list) or len(bars)!=80:return None
+        bars=[max(0.,min(1.,float(x))) for x in bars]
+        return rgb,bars
+    except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
+def reactive_frame(base,bars,key,count,brightness):
+    def level(lo,hi):
+        values=bars[lo:hi]
+        return sum(values)/len(values) if values else 0.
+    def rgb(v):return tuple(round(c*brightness/100*(.08+.92*max(0.,min(1.,v)))) for c in base)
+    if key=='mouse':return [rgb(level(0,12))]
+    if key in ('ram1','ram2'):
+        energy=level(0,20) if key=='ram1' else level(20,65)
+        return [rgb(max(0.,min(1.,energy*count-i))) for i in range(count)]
+    return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count))) for i in range(count)]
 def frame(rgb,mode,brightness,t,index=0):
     if mode=='Rainbow': rgb=tuple(round(x*255) for x in colorsys.hsv_to_rgb((t/8+index*.12)%1,1,1))
     scale=brightness/100
@@ -45,10 +68,13 @@ def main():
     from PySide6.QtDBus import QDBusConnection,QDBusInterface
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,QSlider,QColorDialog,QCheckBox,QMessageBox
+    headless='--visualiser' in sys.argv
     app=QApplication(sys.argv); CONFIG.mkdir(parents=True,exist_ok=True)
     lock=open(CONFIG/'instance.lock','a')
     try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    except BlockingIOError: return
+    except BlockingIOError:
+        if headless:print('Sakura Lighting is already running; visualiser will retry.',file=sys.stderr)
+        return
     win=QWidget(); win.setWindowTitle('Sakura Lighting'); win.resize(720,540)
     win.setStyleSheet('QWidget{background:#19141f;color:#f4e5f1;font-size:14px} QPushButton,QComboBox{background:#38283f;border:1px solid #59415c;border-radius:8px;padding:10px} QPushButton:hover{background:#56334e} QPushButton:disabled{color:#817683} QSlider::groove:horizontal{height:6px;background:#514052;border-radius:3px} QSlider::handle:horizontal{background:#f478d7;width:16px;margin:-5px 0;border-radius:8px}')
     layout=QVBoxLayout(win);layout.setContentsMargins(28,24,28,24);layout.setSpacing(14)
@@ -110,6 +136,10 @@ def main():
             except (OSError,KeyError,TypeError,ValueError):pass
             finally:claimed.unlink(missing_ok=True)
         p=snapshot();status.setText(state['status'])
+        if headless:
+            if chroma_data() is None:app.quit();return
+            state['active']=released()
+            save(CONFIG/'visualiser-status.json',dict(status=state['status'],heartbeat=time.time()))
         if state['active'] and released():
             payload=dict(p,heartbeat=time.time())
             if time.monotonic()-state.get('published',0)>=1:
@@ -125,11 +155,12 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0
+        multiplier=1.0; blended={}
         while not halt.wait(.12):
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
+                blended.clear()
                 continue
             p=state['profile'];now=time.monotonic();errors=[]
             target=p.get('locked_brightness',15)/100 if state['locked'] and p.get('dim_on_lock',True) else 1.0
@@ -144,26 +175,43 @@ def main():
                     if ks:devices['keyboard']=ks[0]
                     for i,d in enumerate(rs[:2]):devices['ram'+str(i+1)]=d
                 except Exception as e:disconnect();errors.append(str(e))
+            chroma=chroma_data()
             for k in rows:
                 if not p.get(k,{}).get('enabled'):continue
-                h=p[k]['color'];rgb=frame(tuple(int(h[i:i+2],16) for i in (1,3,5)),p['mode'],p['brightness']*multiplier*p[k].get('brightness',100)/100,now)
-                if last.get(k)==rgb:continue
+                h=p[k]['color'];manual=tuple(int(h[i:i+2],16) for i in (1,3,5));target_color=chroma[0] if chroma is not None else manual
+                previous=blended.get(k,manual);base=tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
+                effect='Static' if chroma is not None and p['mode']=='Rainbow' else p['mode']
+                power=p['brightness']*multiplier*p[k].get('brightness',100)/100
+                if chroma is not None:
+                    count=1 if k=='mouse' else len(devices[k].leds) if k in devices else 0
+                    if not count:continue
+                    values=reactive_frame(base,chroma[1],k,count,power) if p['mode']!='Blackout' else [(0,0,0)]*count
+                else:
+                    rgb=frame(base,effect,power,now);values=[rgb]*(1 if k=='mouse' else len(devices[k].leds) if k in devices else 0)
+                if not values:continue
+                signature=tuple(values)
+                if last.get(k)==signature:continue
                 try:
-                    if k=='mouse':mouse_write(rgb)
+                    if k=='mouse':mouse_write(values[0])
                     elif k in devices:
                         from openrgb.utils import RGBColor
-                        d=devices[k];d.set_colors([RGBColor(*rgb) for _ in d.leds],fast=True)
+                        d=devices[k];d.set_colors([RGBColor(*rgb) for rgb in values],fast=True)
                     else:continue
-                    last[k]=rgb
+                    last[k]=signature
                 except Exception as e:
                     errors.append(k+': '+str(e))
                     if k!='mouse':disconnect();retry=now+5
-            state['status']='Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
+            state['status']=('Chroma Sync active | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
-        halt.set();state['active']=False;mobile_status.unlink(missing_ok=True);save(CONFIG/'profile.json',snapshot())
-    app.aboutToQuit.connect(close);win.show();app.exec();thread.join(.5)
+        halt.set();state['active']=False;mobile_status.unlink(missing_ok=True)
+        if headless:(CONFIG/'visualiser-status.json').unlink(missing_ok=True)
+        else:save(CONFIG/'profile.json',snapshot())
+    app.aboutToQuit.connect(close)
+    if headless:snapshot();state['active']=released();app.setQuitOnLastWindowClosed(False)
+    else:win.show()
+    app.exec();thread.join(.5)
 if __name__=='__main__':
     if '--install' in sys.argv:install()
     elif '--uninstall' in sys.argv:uninstall()

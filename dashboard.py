@@ -40,10 +40,38 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.start(100);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
   self.mobile=MobileCompanion(self)
 
+ def publish_chroma(self):
+  enabled=bool(self.display_options.get('hardware_visualiser',False))
+  color=self.theme_target().name()
+  try:
+   if enabled or self.chroma_was_enabled is not False:self.write_setting('dashboard-chroma.json',dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars))
+   self.chroma_was_enabled=enabled
+   if not enabled:
+    if self.chroma_process and self.chroma_process.poll() is not None:self.chroma_process=None
+    return
+   if self.chroma_process and self.chroma_process.poll() is None:return
+   if time.monotonic()<self.chroma_retry:return
+   self.chroma_retry=time.monotonic()+5
+   interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
+   if not interpreter.is_file():interpreter=Path(sys.executable)
+   package=Path(__file__).resolve().parent/'optional/lighting.py'
+   installed=Path.home()/'.local/share/sakura-lighting/lighting.py'
+   # The old standalone GUI has no IPC. Release only that exact user-owned process.
+   for proc in psutil.process_iter(['pid','cmdline','uids']):
+    try:
+     argv=proc.info.get('cmdline') or [];uids=proc.info.get('uids')
+     if uids and uids.real==os.getuid() and len(argv)>1 and argv[1]==str(installed) and '--visualiser' not in argv:
+      proc.terminate();self.chroma_error='Handing control over from standalone Sakura Lighting';return
+    except (psutil.NoSuchProcess,psutil.AccessDenied):continue
+   self.chroma_error='';self.chroma_process=subprocess.Popen([str(interpreter),str(package),'--visualiser'],start_new_session=True)
+  except OSError as e:self.chroma_error=str(e)
+ def theme_target(self):
+  return QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
  def refresh_profile(self):
   name=self.sync_status.get('detected_game','Desktop');profile=read_profiles(self.sync_root).get(name,{})
   self.game_profile=profile if isinstance(profile,dict) and profile.get('enabled') else {}
@@ -256,7 +284,18 @@ class Dashboard(QWidget):
   package=Path(__file__).resolve().parent/'optional/lighting.py'
   interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
   if not interpreter.is_file():interpreter=Path(sys.executable)
+  hardware_visualiser=QCheckBox('Enable media-reactive hardware lighting');hardware_visualiser.setChecked(bool(view.get('hardware_visualiser',False)));features.addWidget(hardware_visualiser)
+  reactive_hint=QLabel('Automatically runs Sakura Lighting in the background. Keyboard, RAM and mouse react to local Spotify audio; album colours are used when enabled.');reactive_hint.setWordWrap(True);features.addWidget(reactive_hint)
   feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
+  reactive_status=QLabel();reactive_status.setWordWrap(True);features.addWidget(reactive_status)
+  def refresh_reactive():
+   if not self.display_options.get('hardware_visualiser',False):reactive_status.setText('Media lighting is disabled');return
+   try:
+    state=json.loads((Path.home()/'.config/sakura-lighting/visualiser-status.json').read_text())
+    if abs(time.time()-state['heartbeat'])<3:reactive_status.setText(state['status']);return
+   except (OSError,ValueError,KeyError,TypeError):pass
+   reactive_status.setText(self.chroma_error or 'Starting media lighting / waiting for hardware')
+  reactive_timer=QTimer(dlg);reactive_timer.timeout.connect(refresh_reactive);reactive_timer.start(500);refresh_reactive()
   install_btn=QPushButton('Install / update Sakura Lighting');launch_btn=QPushButton('Open Sakura Lighting');remove_btn=QPushButton('Uninstall Sakura Lighting')
   def refresh_feature():
    feature_status.setText('Installed' if installed.is_file() else 'Not installed');launch_btn.setEnabled(installed.is_file());remove_btn.setEnabled(installed.is_file())
@@ -278,7 +317,8 @@ class Dashboard(QWidget):
   features.addStretch();refresh_feature()
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
-  mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('mode'),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
+  mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('chroma_previous_mode',profile.get('mode')),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
+  mode.setEnabled(not hardware_visualiser.isChecked());hardware_visualiser.toggled.connect(lambda enabled:mode.setEnabled(not enabled))
   brightness=QSlider(Qt.Orientation.Horizontal);brightness.setRange(0,100);brightness.setValue(int(profile.get('brightness',100)));level=QLabel(str(brightness.value())+'%');brightness.valueChanged.connect(lambda v:level.setText(str(v)+'%'));form.addRow('Brightness',brightness);form.addRow('',level)
   colors={}
   for key,label,default in [('idle','Desktop',(244,120,215)),('scanning','Normal gameplay',(179,108,255)),('combat','Combat pulse',(240,24,134)),('manual','Manual colour',(244,120,215))]:
@@ -306,13 +346,15 @@ class Dashboard(QWidget):
   if result==2:self.open_sync_settings();return
   if result==3:self.open_profiles();return
   if result!=QDialog.DialogCode.Accepted:return
-  data=dict(mode=('auto','manual','off')[mode.currentIndex()],brightness=brightness.value())
+  selected_mode=('auto','manual','off')[mode.currentIndex()]
+  data=dict(mode='off' if hardware_visualiser.isChecked() else selected_mode,brightness=brightness.value())
+  if hardware_visualiser.isChecked():data['chroma_previous_mode']=selected_mode
   data.update({k:[v.red(),v.green(),v.blue()] for k,v in colors.items()});data.update({k:v.isChecked() for k,v in checks.items()})
   try:
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked()));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -358,7 +400,7 @@ class Dashboard(QWidget):
   if message:self.audio_status='Spotify capture: '+message.splitlines()[-1];sys.stderr.write(message+'\n')
 
  def update_spectrum(self):
-  if not self.display_options.get('visualiser',True):
+  if not (self.display_options.get('visualiser',True) or self.display_options.get('hardware_visualiser',False)):
    if self.capture.state()!=QProcess.NotRunning:self.capture.kill()
    self.spectrum.reset();self.bars=[0]*80;self.audio_status='Visualiser disabled';return
   if self.spotify_target!=self.capture_target:
@@ -377,6 +419,9 @@ class Dashboard(QWidget):
   self.media_bridge.stop();self.discord.disconnect();self.connect.closed=True
   self.sync_timer.stop()
   self.audio_timer.stop()
+  self.chroma_timer.stop()
+  try:self.write_setting('dashboard-chroma.json',dict(enabled=False,heartbeat=time.time()))
+  except OSError:pass
   if self.capture.state() != QProcess.NotRunning:
    self.capture.kill()
    self.capture.waitForFinished(500)
@@ -430,7 +475,7 @@ class Dashboard(QWidget):
   angles=[math.atan2(y-cy,x-cx) for x,y in pts];travel=sum(math.atan2(math.sin(b-a),math.cos(b-a)) for a,b in zip(angles,angles[1:]))
   if 65<avg<280 and abs(travel)>5.35 and max(r)-min(r)<avg*.85 and math.dist(pts[0],pts[-1])<avg*.5:self.bloom_menu()
  def paintEvent(self,e):
-  target=QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
+  target=self.theme_target()
   if self.responsive():
    self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self);return
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.game_profile or self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
