@@ -247,6 +247,31 @@ class Dashboard(QWidget):
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
+  optional=QWidget();features=QVBoxLayout(optional);tabs.addTab(optional,'Optional features')
+  heading=QLabel('Sakura Lighting');heading.setStyleSheet('font-size:20px;font-weight:bold;color:#f478d7');features.addWidget(heading)
+  desc=QLabel('Standalone RGB controller for your keyboard, both RAM sticks and mouse. Uses the existing OpenLinkHub and ckb-next backends.');desc.setWordWrap(True);features.addWidget(desc)
+  installed=Path.home()/'.local/share/sakura-lighting/lighting.py'
+  package=Path(__file__).resolve().parent/'optional/lighting.py'
+  interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
+  if not interpreter.is_file():interpreter=Path(sys.executable)
+  feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
+  install_btn=QPushButton('Install / update Sakura Lighting');launch_btn=QPushButton('Open Sakura Lighting');remove_btn=QPushButton('Uninstall Sakura Lighting')
+  def refresh_feature():
+   feature_status.setText('Installed' if installed.is_file() else 'Not installed');launch_btn.setEnabled(installed.is_file());remove_btn.setEnabled(installed.is_file())
+  def manage_feature(action):
+   try:
+    result=subprocess.run([str(interpreter),str(package),action],capture_output=True,text=True,timeout=10,check=True)
+    refresh_feature()
+   except (OSError,subprocess.SubprocessError) as e:feature_status.setText(str(e))
+  def launch_feature():
+   try:subprocess.Popen([str(interpreter),str(installed)],start_new_session=True)
+   except OSError as e:feature_status.setText(str(e))
+  install_btn.clicked.connect(lambda:manage_feature('--install'));launch_btn.clicked.connect(launch_feature)
+  def remove_feature():
+   if QMessageBox.question(dlg,'Uninstall Sakura Lighting','Close Sakura Lighting first. Remove its application files? Your saved profile will be retained.')==QMessageBox.StandardButton.Yes:manage_feature('--uninstall')
+  remove_btn.clicked.connect(remove_feature)
+  for b in (install_btn,launch_btn,remove_btn):features.addWidget(b)
+  features.addStretch();refresh_feature()
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
   mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('mode'),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
