@@ -552,7 +552,7 @@ class Dashboard(QWidget):
   target=self.theme_target()
   if self.responsive():
    self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self)
-   p=QPainter(self);self.notifications.paint(p,QRectF(self.width()*.29,8,self.width()*.40,74),self.accent);p.end();return
+   return
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.game_profile or self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
    p.setPen(QColor(color));f=QFont('Sans Serif',size);f.setWeight(QFont.Weight(weight));p.setFont(f);p.drawText(QRectF(x,y,w,h),Qt.AlignVCenter|Qt.AlignLeft,p.fontMetrics().elidedText(str(s),Qt.ElideRight,int(w)))
@@ -573,9 +573,10 @@ class Dashboard(QWidget):
    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
   lyrics=getattr(self,'lyrics_window',None)
+  notice_active=self.notifications.visible()
   if lyrics:paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
   for i,b in enumerate(self.bars):
-   h=max(2,min(1,b)*190);c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,5,h),2,2)
+   base=505 if lyrics and notice_active else 600;h=max(2,min(1,b)*(95 if lyrics and notice_active else 190));c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,base-h,5,h),2,2)
   import re
   gpu=re.match(r'\s*(\d+(?:\.\d+)?)\s*/\s*(.*)',str(self.stats[3]))
   entries=[('CPU',self.stats[0],self.stats[2]),('GPU',float(gpu.group(1)) if gpu else None,gpu.group(2) if gpu else ''),('MEMORY',self.stats[1],'')]
@@ -594,7 +595,9 @@ class Dashboard(QWidget):
   text(1120,640,140,45,'MEDIA ↗',18,self.accent)
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
   paint_settings_petal(p,1850,665,22,self.accent)
-  p.resetTransform();self.notifications.paint(p,QRectF(self.width()*.29,8,self.width()*.40,74),self.accent)
+  slot=QRectF(70,515,1080,80) if lyrics else QRectF(1300,420,500,120)
+  slot=p.transform().mapRect(slot)
+  p.resetTransform();self.notifications.paint(p,slot,self.accent)
   p.scale(self.width()/1920,self.height()/720)
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
