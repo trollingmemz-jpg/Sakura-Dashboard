@@ -31,7 +31,9 @@ def paint_responsive(o):
     p.setBrush(accent);p.drawRoundedRect(QRectF(bar.x(),bar.y(),bar.width()*max(0,min(100,val))/100,bar.height()),3,3)
  item=o.player.get('item') or {};local=getattr(getattr(o,'media',None),'state',{})
  title=o.track[0] if local else item.get('name') or o.track[0];artist=o.track[1] if local else ', '.join(a.get('name','') for a in item.get('artists',[])) or o.track[1]
- text(pad,pad,w*.5-pad,40,'桜 / SAKURA',min(25,w*.055),accent);text(w*.5,pad,w*.5-pad,40,time.strftime('%H:%M'),min(38,w*.075),align=Qt.AlignRight)
+ text(pad,pad,w*.5-pad,40,'桜 / SAKURA',min(25,w*.055),accent)
+ with o.editor.section(p,'clock',QRectF(w*.5,pad,w*.5-pad,40)):
+  text(w*.5,pad,w*.5-pad,40,time.strftime('%H:%M'),min(38,w*.075),align=Qt.AlignRight)
  top=pad+56;bottom=h-pad-48;space=max(100,bottom-top)
  lyrics=getattr(o,'lyrics_window',None)
  notice=getattr(o,'notifications',None)
@@ -50,16 +52,21 @@ def paint_responsive(o):
   tx=ax+aw+pad;ty=top;tw=max(50,w*.59-tx)
   sx=w*.64;sy=top;sw=w-pad-sx;sh=space*.70
   vx=pad;vy=top+max(aw,134*max(.75,min(1.45,h/720)))+16;vw=w*.59-pad;vh=max(0,bottom-vy-38)
- art=o.art
- if not art.isNull():
-  scaled=art.scaled(int(aw),int(aw),Qt.KeepAspectRatio,Qt.SmoothTransformation);p.drawImage(QPointF(ax+(aw-scaled.width())/2,ay+(aw-scaled.height())/2),scaled)
- else:p.fillRect(QRectF(ax,ay,aw,aw),QColor('#39253e'))
+ with o.editor.section(p,'artwork',QRectF(ax,ay,aw,aw)) as artwork_map:
+  art=o.art
+  if not art.isNull():
+   scaled=art.scaled(int(aw),int(aw),Qt.KeepAspectRatio,Qt.SmoothTransformation);p.drawImage(QPointF(ax+(aw-scaled.width())/2,ay+(aw-scaled.height())/2),scaled)
+  else:p.fillRect(QRectF(ax,ay,aw,aw),QColor('#39253e'))
  unit=max(.75,min(1.45,h/720))
- text(tx,ty,tw,24*unit,'',15*unit,accent)
- text(tx,ty+26*unit,tw,40*unit,title,min(36*unit,tw*.10))
- text(tx,ty+68*unit,tw,28*unit,artist,min(22*unit,tw*.07),'#c393cc')
- bw=min(48*unit,(tw-12)/3)
- for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+98*unit,bw,36*unit,label,action)
+ with o.editor.section(p,'track',QRectF(tx,ty,tw,96*unit)) as track_map:
+  text(tx,ty,tw,24*unit,'',15*unit,accent)
+  text(tx,ty+26*unit,tw,40*unit,title,min(36*unit,tw*.10))
+  text(tx,ty+68*unit,tw,28*unit,artist,min(22*unit,tw*.07),'#c393cc')
+ with o.editor.section(p,'playback',QRectF(tx,ty+98*unit,tw,36*unit)) as playback_map:
+  bw=min(48*unit,(tw-12)/3)
+  for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+98*unit,bw,36*unit,label,action)
+ for action in ('previous','toggle','next'):
+  if action in o.hit_regions:o.hit_regions[action]=playback_map.mapRect(o.hit_regions[action])
  if active:
   if portrait or lyrics:
    if portrait and sy+sh>cap_y-cap_gap:sh=max(1,cap_y-cap_gap-sy);vy=sy+sh+4
@@ -70,16 +77,24 @@ def paint_responsive(o):
    cap_rect=QRectF(sx,cap_y,sw,cap_h)
  if lyrics:
   if portrait:
-   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh*.56),accent)
-   stats(sx,sy+sh*.56,sw,sh*.44)
+   with o.editor.section(p,'lyrics',QRectF(sx,sy,sw,sh*.56)):
+    paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh*.56),accent)
+   with o.editor.section(p,'resources',QRectF(sx,sy+sh*.56,sw,sh*.44)):
+    stats(sx,sy+sh*.56,sw,sh*.44)
   else:
    lyric_h=space*.52
-   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,lyric_h),accent)
-   stats(sx,sy+lyric_h+pad*.4,sw,max(45,min(space*.36,bottom-sy-lyric_h-pad*.4-30)))
- else:stats(sx,sy,sw,sh)
- if vh>8:
-  for i,b in enumerate(o.bars):
-   bh=max(2,min(1,b)*vh);p.setPen(Qt.NoPen);c=QColor(accent);c.setAlpha(185);p.setBrush(c);p.drawRoundedRect(QRectF(vx+i*vw/80,vy+vh-bh,max(1,vw/80*.38),bh),2,2)
+   with o.editor.section(p,'lyrics',QRectF(sx,sy,sw,lyric_h)):
+    paint_lyrics(p,lyrics,QRectF(sx,sy,sw,lyric_h),accent)
+   rh=max(45,min(space*.36,bottom-sy-lyric_h-pad*.4-30))
+   with o.editor.section(p,'resources',QRectF(sx,sy+lyric_h+pad*.4,sw,rh)):
+    stats(sx,sy+lyric_h+pad*.4,sw,rh)
+ else:
+  with o.editor.section(p,'resources',QRectF(sx,sy,sw,sh)):
+   stats(sx,sy,sw,sh)
+ with o.editor.section(p,'visualiser',QRectF(vx,vy,vw,vh)) as visualiser_map:
+  if vh>8:
+   for i,b in enumerate(o.bars):
+    bh=max(2,min(1,b)*vh);p.setPen(Qt.NoPen);c=QColor(accent);c.setAlpha(185);p.setBrush(c);p.drawRoundedRect(QRectF(vx+i*vw/80,vy+vh-bh,max(1,vw/80*.38),bh),2,2)
  game=o.sync_status.get('detected_game','Desktop');voice=o.discord.state.get('channel','')
  text(pad,bottom-30,w-2*pad,24,('Game: '+game if game!='Desktop' else '')+('  •  Voice: '+voice if voice else ''),12,'#a982b5')
  bw=min(95,(w-2*pad-60)/3)
@@ -88,4 +103,5 @@ def paint_responsive(o):
  o.hit_regions['settings']=paint_settings_petal(p,w-pad-18,h-pad-18,18,accent)
  if notice:
   notice.paint(p,cap_rect if cap_rect is not None else QRectF(),accent)
+ o.editor.overlay(p,accent)
  p.end()
