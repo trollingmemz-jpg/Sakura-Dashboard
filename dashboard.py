@@ -617,7 +617,7 @@ class Dashboard(QWidget):
    text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
   self.hit_regions={a:playback_map.mapRect(QRectF(*r)) for a,r in [('previous',(300,330,70,60)),('toggle',(380,330,70,60)),('next',(460,330,70,60)),('connections',(550,330,630,60))]}
   lyrics=getattr(self,'lyrics_window',None)
-  notice_active=self.notifications.visible()
+  notice_active=(self.notifications.visible() or self.editor.active) and not self.editor.has_custom('notifications')
   if lyrics:
    with self.editor.section(p,'lyrics',QRectF(1270,135,600,310)):
     paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
@@ -645,7 +645,7 @@ class Dashboard(QWidget):
   self.settings_hit=p.transform().mapRect(paint_settings_petal(p,1850,665,22,self.accent))
   slot=QRectF(70,515,1080,80) if lyrics else QRectF(1300,420,500,120)
   slot=p.transform().mapRect(slot)
-  p.resetTransform();self.notifications.paint(p,slot,self.accent)
+  p.resetTransform();self.notifications.paint(p,slot,self.accent,self.editor)
   p.scale(self.width()/1920,self.height()/720)
   self.editor.overlay(p,self.accent)
   if self.circle_points:
