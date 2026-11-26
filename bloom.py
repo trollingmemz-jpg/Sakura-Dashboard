@@ -33,7 +33,7 @@ class Bloom(InlinePanel):
    self.dismiss();return True
   return super().eventFilter(obj,event)
  def geometry_at(self,i,elapsed):
-  n=len(self.labels);step=.27 if n==5 else .16
+  n=len(self.labels);step=.12 if n==5 else .08
   t=max(0,min(1,(elapsed-i*step)/step))
   if self.closing is not None:t=1-max(0,min(1,(time.monotonic()-self.closing-(n-1-i)*.045)/.12))
   u=(1-math.cos(math.pi*t))/2;a=-math.pi/2+i*2*math.pi/n
@@ -92,7 +92,7 @@ class Bloom(InlinePanel):
      p.restore()
    p.restore()
   for i,label in enumerate(self.labels):
-   step=.27 if len(self.labels)==5 else .16
+   step=.12 if len(self.labels)==5 else .08
    if elapsed<(i+1)*step:continue
    if self.closing is not None and time.monotonic()-self.closing>(len(self.labels)-1-i)*.045:continue
    a=-math.pi/2+i*2*math.pi/len(self.labels);x=92*math.cos(a);y=92*math.sin(a)
@@ -104,7 +104,7 @@ class Bloom(InlinePanel):
    color=QColor('#f1ddec')
    if self.cursor is not None and math.hypot(self.cursor.x()-x,self.cursor.y()-y)<38:
     color=QColor(self.accent).lighter(135)
-   color.setAlphaF(max(0.,min(1.,(elapsed-(i+1)*step)/.16)))
+   color.setAlphaF(max(0.,min(1.,(elapsed-(i+1)*step)/.08)))
    p.setPen(color)
    p.drawText(QRectF(x-49,y-22,98,44),Qt.AlignmentFlag.AlignCenter|Qt.TextFlag.TextWordWrap,label)
   p.setBrush(QColor('#160e20'));p.setPen(QPen(self.accent,1));p.drawEllipse(QPointF(0,0),30,30)
