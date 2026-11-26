@@ -14,3 +14,5 @@ api.runtime.onMessage.addListener((message,sender)=>{
  })();
 });
 api.tabs.onRemoved.addListener(id=>{if(active===id)active=null;});
+
+api.browserAction.onClicked.addListener(()=>api.tabs.create({url:api.runtime.getURL('popup.html')}));
