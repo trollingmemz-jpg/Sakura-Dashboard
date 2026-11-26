@@ -31,6 +31,9 @@ class LayoutEditor:
         self.data.pop(self.key(),None);self.drag=None;self.selected=None;self.save();self.host.update()
     def begin(self):
         self.regions={}
+    def has_custom(self,name):
+        values=self.data.get(self.key(),{})
+        return isinstance(values,dict) and name in values
     def target(self,name,base):
         w,h=max(1,self.host.width()),max(1,self.host.height())
         values=self.data.get(self.key(),{})
@@ -82,8 +85,9 @@ class LayoutEditor:
         dx,dy=pos.x()-start.x(),pos.y()-start.y()
         self.guides=[]
         if resize:
-            r.setWidth(max(min(40,w-r.x()),min(w-r.x(),r.width()+dx)))
-            r.setHeight(max(min(28,h-r.y()),min(h-r.y(),r.height()+dy)))
+            minw,minh=(72,32) if name=='notifications' else (40,28)
+            r.setWidth(max(min(minw,w-r.x()),min(w-r.x(),r.width()+dx)))
+            r.setHeight(max(min(minh,h-r.y()),min(h-r.y(),r.height()+dy)))
         else:
             x=max(0,min(w-r.width(),r.x()+dx));y=max(0,min(h-r.height(),r.y()+dy))
             xs=[0,w/2,w];ys=[0,h/2,h]
