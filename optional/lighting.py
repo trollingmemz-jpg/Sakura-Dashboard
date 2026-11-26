@@ -142,7 +142,8 @@ def main():
         if headless:
             if chroma_data() is None:app.quit();return
             state['active']=released()
-            save(CONFIG/'visualiser-status.json',dict(status=state['status'],heartbeat=time.time()))
+            if time.monotonic()-state.get('visualiser_published',0)>=.5:
+                save(CONFIG/'visualiser-status.json',dict(status=state['status'],heartbeat=time.time()));state['visualiser_published']=time.monotonic()
         if state['active'] and released():
             payload=dict(p,heartbeat=time.time())
             if time.monotonic()-state.get('published',0)>=1:
@@ -158,16 +159,20 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={}
-        while not halt.wait(.12):
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.
+        while not halt.wait(max(0.,deadline-time.monotonic())):
+            now=time.monotonic();deadline=now+(1/30 if headless else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
                 blended.clear()
                 continue
-            p=state['profile'];now=time.monotonic();errors=[]
+            p=state['profile'];errors=[]
+            if previous_frame:fps=.85*fps+.15/max(.001,now-previous_frame) if fps else 1/max(.001,now-previous_frame)
+            previous_frame=now
             target=p.get('locked_brightness',15)/100 if state['locked'] and p.get('dim_on_lock',True) else 1.0
-            multiplier += max(-.12,min(.12,target-multiplier))
+            step=.035 if headless else .12
+            multiplier += max(-step,min(step,target-multiplier))
             if client is None and now>=retry:
                 retry=now+5
                 try:
@@ -204,7 +209,7 @@ def main():
                 except Exception as e:
                     errors.append(k+': '+str(e))
                     if k!='mouse':disconnect();retry=now+5
-            state['status']=('Chroma Sync active | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
+            state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
