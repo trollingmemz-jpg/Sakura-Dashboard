@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt,QTimer,QVariantAnimation,QEasingCurve,QRectF,QPoin
 from PySide6.QtGui import QPainter,QColor,QPolygonF,QTransform,QPixmap,QImage,QPen
 from PySide6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QCheckBox,QTabWidget,QListWidget,QListWidgetItem,QApplication,QMessageBox
 from media_library import clean_url
+from browser_install import install_firefox
 
 class MediaPage(QWidget):
  def __init__(self,owner):
@@ -19,6 +20,7 @@ class MediaPage(QWidget):
   for name,fn in [('Copy pairing code',lambda:QApplication.clipboard().setText(self.bridge.token)),('Resume selected',self.resume),('Remove selected',self.remove),('Clear history',self.clear)]:
    b=QPushButton(name);b.clicked.connect(fn);buttons.addWidget(b)
   a.addLayout(buttons)
+  install=QPushButton('Install Firefox connector');install.clicked.connect(lambda:install_firefox(self));a.addWidget(install)
   self.tabs=QTabWidget();self.lists={}
   for kind,label in [('all','Recent'),('anime','Anime'),('manga','Manga')]:
    widget=QListWidget();widget.setWordWrap(True);widget.itemDoubleClicked.connect(lambda _:self.resume());self.tabs.addTab(widget,label);self.lists[kind]=widget
