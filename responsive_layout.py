@@ -47,7 +47,7 @@ def paint_responsive(o):
  if not art.isNull():
   scaled=art.scaled(int(aw),int(aw),Qt.KeepAspectRatio,Qt.SmoothTransformation);p.drawImage(QPointF(ax+(aw-scaled.width())/2,ay+(aw-scaled.height())/2),scaled)
  else:p.fillRect(QRectF(ax,ay,aw,aw),QColor('#39253e'))
-  unit=max(.75,min(1.45,h/720))
+ unit=max(.75,min(1.45,h/720))
  text(tx,ty,tw,24*unit,'NOW PLAYING',15*unit,accent)
  text(tx,ty+26*unit,tw,40*unit,title,min(36*unit,tw*.10))
  text(tx,ty+68*unit,tw,28*unit,artist,min(22*unit,tw*.07),'#c393cc')
