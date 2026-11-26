@@ -45,27 +45,38 @@ class Notifications(QObject):
                     if self.enabled:self.pending.append(item)
     def dismiss(self):
         if self.current and self.dismissed is None:self.dismissed=time.monotonic()
-    def paint(self,p,rect,accent):
-        now=time.monotonic()
-        self.hit=QRectF()
-        if not self.enabled:
-            self.current=None;self.pending.clear();return
-        if self.current and (self.dismissed is not None and now-self.dismissed>=.3):
-            self.current=None
-        if self.current is None and self.pending:
-            self.current=self.pending.popleft();self.started=now;self.dismissed=None
-        if self.current is None:return
-        if now-self.started>=6 and self.dismissed is None:self.dismissed=now
-        t=min(1.,(now-self.started)/.3)
-        opacity=t*t*(3-2*t)
-        if self.dismissed is not None:
-            t=min(1.,(now-self.dismissed)/.3);opacity*=1-t*t*(3-2*t)
-        app,title,body,_=self.current
-        if rect.width()<72 or rect.height()<24:return
-        # The supplied rectangle is the available layout slot, in widget pixels.
+    def default_rect(self,rect):
+        if rect.width()<72 or rect.height()<24:return QRectF(rect)
         height=min(rect.height(),max(48,min(100,rect.width()*.23)))
         width=min(rect.width(),max(height*2.5,min(560,rect.width())))
-        full=QRectF(rect.center().x()-width/2,rect.center().y()-height/2,width,height)
+        return QRectF(rect.center().x()-width/2,rect.center().y()-height/2,width,height)
+    def paint(self,p,rect,accent,editor=None):
+        now=time.monotonic()
+        self.hit=QRectF()
+        preview=bool(editor and editor.active)
+        if not preview:
+            if not self.enabled:
+                self.current=None;self.pending.clear();return
+            if self.current and (self.dismissed is not None and now-self.dismissed>=.3):
+                self.current=None
+            if self.current is None and self.pending:
+                self.current=self.pending.popleft();self.started=now;self.dismissed=None
+            if self.current is None:return
+            if now-self.started>=6 and self.dismissed is None:self.dismissed=now
+            t=min(1.,(now-self.started)/.3)
+            opacity=t*t*(3-2*t)
+            if self.dismissed is not None:
+                t=min(1.,(now-self.dismissed)/.3);opacity*=1-t*t*(3-2*t)
+            app,title,body,_=self.current
+        else:
+            app,title,body="Sakura","Notification preview","Drag to move or resize"
+            opacity=1.
+        full=self.default_rect(rect)
+        if editor:
+            full=editor.target('notifications',full)
+            if preview:editor.regions['notifications']=QRectF(full)
+        width,height=full.width(),full.height()
+        if width<72 or height<24:return
         scale=max(.35,min(1.25,height/80,width/280))
         reveal=max(.01,opacity)
         capsule=QRectF(full.center().x()-width*reveal/2,full.center().y()-height*reveal/2,width*reveal,height*reveal)
@@ -86,7 +97,7 @@ class Notifications(QObject):
         p.save();p.translate(x,y);p.scale(scale,scale);p.rotate(35)
         petal=QPainterPath();petal.moveTo(0,9);petal.cubicTo(-11,-1,-8,-13,0,-8);petal.cubicTo(8,-13,11,-1,0,9);petal.closeSubpath()
         p.setBrush(Qt.NoBrush);p.setPen(QPen(accent,1.4));p.drawPath(petal);p.restore();p.restore()
-        if opacity>.75:self.hit=QRectF(x-16*scale,y-16*scale,32*scale,32*scale)
+        if not preview and opacity>.75:self.hit=QRectF(x-16*scale,y-16*scale,32*scale,32*scale)
     def visible(self):
         return self.enabled and bool(self.current or self.pending)
     def close(self):
