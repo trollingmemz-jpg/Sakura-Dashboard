@@ -178,16 +178,17 @@ class Dashboard(QWidget):
    else:
     choice=Bloom(self,self.accent).exec()-2
     groups=[
-     [('Lighting settings',lambda:self.open_settings(1)),('Optional features',lambda:self.open_settings(3)),('Back',self.bloom_again)],
-     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings),('Back',self.bloom_again)],
-     [('Spotify',self.open_player),('Discord',self.open_discord),('Media',self.open_media),('Back',self.bloom_again)],
-     [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen),('Back',self.bloom_again)],
-     [('System settings',self.open_system),('Exit Sakura',self.close),('Back',self.bloom_again)]
+     [('Lighting settings',lambda:self.open_settings(1)),('Optional features',lambda:self.open_settings(3))],
+     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
+     [('Spotify',self.open_player),('Discord',self.open_discord),('Media',self.open_media)],
+     [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen)],
+     [('System settings',self.open_system),('Exit Sakura',self.close)]
     ]
     if choice<0:return
     options=groups[choice]
    selection=Bloom(self,self.accent,[label for label,fn in options]).exec()-2
-   if 0<=selection<len(options):action=options[selection][1]
+   if selection==-1 and not self.editor.active:action=self.bloom_again
+   elif 0<=selection<len(options):action=options[selection][1]
   finally:self.panel_active=False
   if action:action()
  def bloom_again(self):QTimer.singleShot(0,self.bloom_menu)
