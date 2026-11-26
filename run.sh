@@ -50,4 +50,16 @@ if [[ ! -x .venv/bin/python ]]; then
     echo "Dashboard requires .venv with PySide6 and psutil." >&2
     exit 1
 fi
+# Refresh the installed optional lighting app without enabling it for new users.
+if [[ -f "$HOME/.local/share/sakura-lighting/lighting.py" && -f optional/lighting.py ]]; then
+    lighting_python="$sync/venv/bin/python"
+    [[ -x "$lighting_python" ]] || lighting_python="$root/.venv/bin/python"
+    if ! cmp -s optional/lighting.py "$HOME/.local/share/sakura-lighting/lighting.py"; then
+        "$lighting_python" optional/lighting.py --install >>"$log" 2>&1 || true
+    fi
+fi
+# QR generation fallback when the system qrencode utility is absent.
+if ! command -v qrencode >/dev/null && ! .venv/bin/python -c 'import qrcode, PIL' >/dev/null 2>&1; then
+    timeout 30s .venv/bin/python -m pip install 'qrcode[pil]>=7.4,<9' >>"$log" 2>&1 || true
+fi
 exec .venv/bin/python dashboard.py
