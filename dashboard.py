@@ -40,10 +40,18 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.start(500);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
   self.mobile=MobileCompanion(self)
 
+ def publish_chroma(self):
+  enabled=bool(self.display_options.get('album_theme',False) and self.display_options.get('hardware_theme',True) and self.art_url)
+  target=self.theme_target()
+  try:self.write_setting('dashboard-chroma.json',dict(enabled=enabled,color=target.name(),heartbeat=time.time()))
+  except OSError:pass
+ def theme_target(self):
+  return QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
  def refresh_profile(self):
   name=self.sync_status.get('detected_game','Desktop');profile=read_profiles(self.sync_root).get(name,{})
   self.game_profile=profile if isinstance(profile,dict) and profile.get('enabled') else {}
@@ -248,6 +256,7 @@ class Dashboard(QWidget):
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
+  hardware_theme=QCheckBox();hardware_theme.setChecked(bool(view.get('hardware_theme',True)));hardware_theme.setEnabled(adaptive_theme.isChecked());adaptive_theme.toggled.connect(hardware_theme.setEnabled);dform.addRow('Sync hardware lighting',hardware_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
   optional=QWidget();features=QVBoxLayout(optional);tabs.addTab(optional,'Optional features')
   heading=QLabel('Sakura Lighting');heading.setStyleSheet('font-size:20px;font-weight:bold;color:#f478d7');features.addWidget(heading)
@@ -312,7 +321,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_theme=hardware_theme.isChecked()));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -430,7 +439,7 @@ class Dashboard(QWidget):
   angles=[math.atan2(y-cy,x-cx) for x,y in pts];travel=sum(math.atan2(math.sin(b-a),math.cos(b-a)) for a,b in zip(angles,angles[1:]))
   if 65<avg<280 and abs(travel)>5.35 and max(r)-min(r)<avg*.85 and math.dist(pts[0],pts[-1])<avg*.5:self.bloom_menu()
  def paintEvent(self,e):
-  target=QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
+  target=self.theme_target()
   if self.responsive():
    self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self);return
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.game_profile or self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
