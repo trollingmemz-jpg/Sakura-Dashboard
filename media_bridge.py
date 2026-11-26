@@ -1,9 +1,10 @@
 """Loopback-only, paired browser media bridge."""
 import json,secrets,threading,time,hmac
+from media_library import Library,normalize
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 class MediaBridge:
- def __init__(self):
-  self.token=secrets.token_urlsafe(24);self.data={};self.pending=None;self.lock=threading.Lock();self.server=None;self.status='Ready'
+ def __init__(self,root):
+  self.token=secrets.token_urlsafe(24);self.data={};self.pending=None;self.lock=threading.Lock();self.server=None;self.status='Ready';self.library=Library(root/'media-history.sqlite3');self.enabled=False;self.last_key=None;self.last_save=0
  def start(self):
   owner=self
   class Handler(BaseHTTPRequestHandler):
@@ -17,17 +18,26 @@ class MediaBridge:
      if not 0<n<=8192:raise ValueError()
      d=json.loads(self.rfile.read(n))
      if not isinstance(d,dict):raise ValueError()
-     state={k:str(d.get(k,''))[:300] for k in ('title','episode','source','artist')}
-     state.update(playing=bool(d.get('playing')),position=max(0,float(d.get('position',0))),duration=max(0,float(d.get('duration',0))),time=time.monotonic())
+     state=normalize(d);state['time']=time.monotonic()
      with owner.lock:
-      owner.data=state;command=owner.pending;owner.pending=None
+      if not owner.enabled:self.reply(200,{'command':None});return
+      owner.data=state
+      key=(state['url'],state['part'])
+      now=time.monotonic()
+      if owner.last_key!=key or now-owner.last_save>=15:
+       owner.library.record(state);owner.last_save=now;owner.last_key=key
+      command=owner.pending;owner.pending=None
      self.reply(200,{'command':command})
     except (ValueError,TypeError,OverflowError):self.reply(400,{})
   try:
    self.server=ThreadingHTTPServer(('127.0.0.1',8765),Handler);threading.Thread(target=self.server.serve_forever,daemon=True).start()
   except OSError:self.status='Port 8765 unavailable'
  def current(self):
-  with self.lock:return dict(self.data) if time.monotonic()-self.data.get('time',0)<8 else {}
+  with self.lock:return dict(self.data) if self.enabled and time.monotonic()-self.data.get('time',0)<8 else {}
+ def privacy(self,enabled):
+  with self.lock:
+   self.enabled=enabled
+   if not enabled:self.data={};self.pending=None;self.last_key=None
  def command(self,action):
   if action in ('play','pause','toggle'):
    with self.lock:self.pending=action
