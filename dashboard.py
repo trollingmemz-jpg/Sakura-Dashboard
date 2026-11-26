@@ -6,7 +6,10 @@ from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayo
 from PySide6.QtCore import QProcess
 import psutil
 import urllib.request
-from bloom import Bloom
+from bloom import Bloom, paint_settings_petal
+from layout_editor import LayoutEditor
+from desktop_notifications import Notifications
+from live_lyrics import LyricsWindow, paint_lyrics
 from spotify_connect import Connect
 from inline_panel import InlinePanel
 from discord_connection import DiscordConnection
@@ -40,10 +43,13 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.settings_hit=QRectF();self.editor=LayoutEditor(self);self.notifications=Notifications(self);self.notifications.enabled=False
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   self.update_check_timer=QTimer(self);self.update_check_timer.timeout.connect(self.updater.check);self.update_check_timer.start(1800000)
   if not self.display_options.get('welcome_seen'):QTimer.singleShot(600,self.welcome)
+  self.poll_stop=threading.Event()
   threading.Thread(target=self.poll, daemon=True).start()
+  threading.Thread(target=self.poll_artwork,daemon=True).start()
 
  def welcome(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Welcome to Sakura');layout=QVBoxLayout(dlg)
@@ -131,13 +137,30 @@ class Dashboard(QWidget):
  def bloom_menu(self):
   if self.panel_active:return
   self.panel_active=True
-  try:choice=Bloom(self,self.accent).exec()-2
+  action=None
+  try:
+   if self.editor.active:
+    options=[('Finish',self.editor.toggle),('Reset layout',self.editor.reset),('Cancel',lambda:None)]
+   else:
+    choice=Bloom(self,self.accent).exec()-2
+    groups=[
+     [('Lighting settings',lambda:self.open_settings(1))],
+     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
+     [('Spotify',self.open_player),('Discord',self.open_discord)],
+     [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen)],
+     [('System settings',self.open_system),('Updates',self.open_updates),('Exit Sakura',self.close)]
+    ]
+    if choice<0:return
+    options=groups[choice]
+   selection=Bloom(self,self.accent,[label for label,fn in options]).exec()-2
+   if selection==-1 and not self.editor.active:action=self.bloom_again
+   elif 0<=selection<len(options):action=options[selection][1]
   finally:self.panel_active=False
-  if choice==0:self.open_settings(1)
-  elif choice==1:self.open_settings(0)
-  elif choice==2:self.open_player()
-  elif choice==3:self.open_settings(2)
-  elif choice==4:self.open_system()
+  if action:action()
+ def bloom_again(self):QTimer.singleShot(0,self.bloom_menu)
+ def toggle_fullscreen(self):
+  self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
  def open_system(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
   info=QLabel();info.setWordWrap(True);layout.addWidget(info)
@@ -157,7 +180,20 @@ class Dashboard(QWidget):
     subprocess.Popen([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,str(Path(__file__).resolve())],creationflags=subprocess.CREATE_NO_WINDOW,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     dlg.accept();self.close()
    except OSError as e:log.setText(str(e))
-  for label,fn in [('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  def history():
+   panel=InlinePanel(self);panel.setWindowTitle('Notifications');items=QVBoxLayout(panel)
+   toggle=QCheckBox('Mirror Windows notifications');toggle.setChecked(self.notifications.enabled);items.addWidget(toggle)
+   def change(value):
+    self.notifications.enabled=value
+    if value:self.notifications.backend.enable()
+    else:self.notifications.backend.close()
+   toggle.toggled.connect(change)
+   status=QLabel();status.setWordWrap(True);items.addWidget(status)
+   timer=QTimer(panel);timer.timeout.connect(lambda:status.setText(self.notifications.backend.status));timer.start(500);status.setText(self.notifications.backend.status)
+   for app,title,body,stamp in self.notifications.history:
+    label=QLabel(time.strftime('%H:%M',time.localtime(stamp))+'  ·  '+app+'\n'+title+'\n'+body);label.setTextFormat(Qt.TextFormat.PlainText);label.setWordWrap(True);items.addWidget(label)
+   panel.exec();timer.stop()
+  for label,fn in [('Notifications',history),('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();result=dlg.exec();timer.stop()
   if result==3:self.open_updates()
@@ -234,8 +270,8 @@ class Dashboard(QWidget):
    local=self.media.state
    if local:
     self.track=(local.get('title') or 'Nothing playing',local.get('artist',''))
-    if local.get('key')!=self.media_key:
-     self.media_key=local.get('key');self.art=QImage.fromData(local.get('art',b''));self.art_url=''
+    if (local.get('key'),local.get('art'))!=self.media_key:
+     self.media_key=(local.get('key'),local.get('art'));self.art=QImage.fromData(local.get('art',b''));self.art_url=''
      if not self.art.isNull():
       c=self.art.scaled(1,1,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation).pixelColor(0,0);h,s,v,_=c.getHsvF();self.art_accent=QColor.fromHsvF(max(0,h),max(.35,min(.8,s)),.95)
     return
@@ -258,6 +294,7 @@ class Dashboard(QWidget):
   general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
   rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
   display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
+  edit_layout=QPushButton('Edit layout');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
   try:profile=json.loads((self.sync_root/'dashboard-rgb.json').read_text())
   except (OSError,ValueError):profile={}
   if not isinstance(profile,dict):profile={}
@@ -310,6 +347,7 @@ class Dashboard(QWidget):
   result=dlg.exec()
   if result==2:self.open_sync_settings();return
   if result==3:self.open_profiles();return
+  if result==4:self.editor.toggle();return
   if result!=QDialog.DialogCode.Accepted:return
   data=dict(mode=('auto','manual','off')[mode.currentIndex()],brightness=brightness.value())
   data.update({k:[v.red(),v.green(),v.blue()] for k,v in colors.items()});data.update({k:v.isChecked() for k,v in checks.items()})
@@ -337,6 +375,8 @@ class Dashboard(QWidget):
   self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
 
  def closeEvent(self, event):
+  self.poll_stop.set();self.notifications.close()
+  if getattr(self,'lyrics_window',None):self.lyrics_window.close()
   self.discord.disconnect();self.connect.closed=True;self.win_audio.closed=True;self.media.closed=True
   if self.sync_status:
    try:self.write_setting('dashboard-advanced.request',dict(action='quit'))
@@ -348,20 +388,36 @@ class Dashboard(QWidget):
    self.capture.waitForFinished(500)
   super().closeEvent(event)
 
+ def theme_target(self):
+  return QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
+ def now_playing(self):
+  local=self.media.state
+  if local:return (local.get('title') or 'Nothing playing',local.get('artist',''))
+  state=self.connect.state
+  item=(state.get('player') or {}).get('item') or {} if abs(time.time()-state.get('time',0))<45 else {}
+  return (item.get('name') or 'Nothing playing',', '.join(a.get('name','') for a in item.get('artists',[])))
+ def poll_artwork(self):
+  while not self.poll_stop.is_set():
+   self.poll_player();self.poll_stop.wait(.25)
  def poll(self):
-  while True:
-   try:
-    self.poll_player()
-    self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent,'—',self.gpu_stats.read())
+  while not self.poll_stop.is_set():
+   try:self.stats=(psutil.cpu_percent(),psutil.virtual_memory().percent,'—',self.gpu_stats.read())
    except Exception:pass
-   time.sleep(2)
- def keyPressEvent(self,e):
-  if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
-  if e.key()==Qt.Key_Escape:self.close()
-  if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
-  if e.key()==Qt.Key_F2:self.bloom_menu()
-  if e.key()==Qt.Key_F3:self.open_rgb_settings()
+   self.poll_stop.wait(2)
+ def open_lyrics(self):
+  panel=getattr(self,'lyrics_window',None)
+  if panel is not None:
+   self.lyrics_window=None;panel.close();self.update();return
+  panel=LyricsWindow(self);self.lyrics_window=panel
+  self.update()
  def mousePressEvent(self,e):
+  if self.editor.active:
+   if e.button()==Qt.MouseButton.LeftButton:
+    if self.settings_hit.contains(e.position()):self.bloom_menu()
+    else:self.editor.press(e.position())
+   return
+  if e.button()==Qt.MouseButton.LeftButton and self.notifications.hit.contains(e.position()):
+   self.notifications.dismiss();self.update();return
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if self.responsive():
    for action,rect in self.hit_regions.items():
@@ -375,58 +431,87 @@ class Dashboard(QWidget):
    return
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
-  elif math.hypot(x-1830,y-655)<45:self.bloom_menu()
-  elif 300<=x<=370 and 330<=y<=390:self.command('previous')
-  elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.playing() else 'play')
-  elif 460<=x<=530 and 330<=y<=390:self.command('next')
-  elif 550<=x<=1180 and 330<=y<=390:self.open_player()
+  elif math.hypot(x-1850,y-665)<32:self.bloom_menu()
+  else:
+   for action,rect in self.hit_regions.items():
+    if rect.contains(e.position()):
+     if action=='connections':self.open_player()
+     else:self.command(('pause' if self.playing() else 'play') if action=='toggle' else action)
+     return
   super().mousePressEvent(e)
  def mouseMoveEvent(self,e):
+  if self.editor.move(e.position()):return
   if self.circle_points:self.circle_points.append((e.position().x()*1920/max(1,self.width()),e.position().y()*720/max(1,self.height())))
  def mouseReleaseEvent(self,e):
+  if self.editor.release():return
   pts=self.circle_points;self.circle_points=[]
   if len(pts)<12:return
   cx=sum(x for x,y in pts)/len(pts);cy=sum(y for x,y in pts)/len(pts);r=[math.hypot(x-cx,y-cy) for x,y in pts];avg=sum(r)/len(r)
   angles=[math.atan2(y-cy,x-cx) for x,y in pts];travel=sum(math.atan2(math.sin(b-a),math.cos(b-a)) for a,b in zip(angles,angles[1:]))
   if 65<avg<280 and abs(travel)>5.35 and max(r)-min(r)<avg*.85 and math.dist(pts[0],pts[-1])<avg*.5:self.bloom_menu()
  def paintEvent(self,e):
-  target=QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
+  self.editor.begin()
+  target=self.theme_target()
   if self.responsive():
-   self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self);return
+   self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));paint_responsive(self)
+   return
   p=QPainter(self); p.setRenderHint(QPainter.Antialiasing); p.scale(self.width()/1920,self.height()/720); g=QLinearGradient(0,0,1920,720); self.accent=QColor(*(round(a+(b-a)*.10) for a,b in zip(self.accent.getRgb()[:3],target.getRgb()[:3])));g.setColorAt(0,QColor('#100b20'));g.setColorAt(1,self.accent.darker(430) if self.game_profile or self.display_options.get('album_theme',False) else QColor('#32132e'));p.fillRect(QRectF(0,0,1920,720),g)
   def text(x,y,w,h,s,size,color='#f5d9ef',weight=400):
    p.setPen(QColor(color));f=QFont('Sans Serif',size);f.setWeight(QFont.Weight(weight));p.setFont(f);p.drawText(QRectF(x,y,w,h),Qt.AlignVCenter|Qt.AlignLeft,p.fontMetrics().elidedText(str(s),Qt.ElideRight,int(w)))
   p.setPen(Qt.NoPen)
   for i,(x,y,v) in enumerate(self.petals if (self.game_profile.get('petals') if self.game_profile.get('petals') is not None else self.display_options.get('petals',True)) else []):
    petal=QColor(self.accent);petal.setAlpha(45);p.setBrush(petal);p.save();p.translate(x,y);p.rotate(y/4);p.drawEllipse(QRectF(-5,-2,10,4));p.restore();self.petals[i]=((x+v*.4)%1920,(y+v)%720,v)
-  text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500);text(1300,14,550,76,time.strftime('%H:%M'),46)
-  art=self.art
-  if not art.isNull():p.drawImage(QRectF(70,150,200,200),art)
-  else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
-  item=self.player.get('item') or {};title=self.track[0] if self.media.state else item.get('name') or self.track[0];artist=self.track[1] if self.media.state else ', '.join(a.get('name','') for a in item.get('artists',[])) or self.track[1]
-  text(300,150,880,40,'NOW PLAYING',17,self.accent);text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
-  p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
-  for x,direction in ((335,-1),(495,1)):
-   path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
-  if self.playing():
-   p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
-  else:
-   path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
-  text(550,330,630,60,(self.player.get('device') or {}).get('name','Music connections'),18,self.accent)
-  for i,b in enumerate(self.bars):
-   h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
-  p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
-  for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
-   y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
-   if value is not None:p.fillRect(QRectF(1300,y+112,500,4),QColor('#4b294c'));p.fillRect(QRectF(1300,y+112,5*value,4),QColor('#f05aef'))
+  text(70,40,900,55,'桜  /  SAKURA',23,self.accent,500)
+  with self.editor.section(p,'clock',QRectF(1300,14,550,76)):
+   text(1300,14,550,76,time.strftime('%H:%M'),46)
+  with self.editor.section(p,'artwork',QRectF(70,150,200,200)) as artwork_map:
+   if not self.art.isNull():p.drawImage(QRectF(70,150,200,200),self.art)
+   else:p.fillRect(QRectF(70,150,200,200),QColor('#39253e'))
+  title,artist=self.now_playing()
+  with self.editor.section(p,'track',QRectF(300,195,880,130)) as track_map:
+   text(300,195,880,90,title,40);text(300,280,880,45,artist,23,'#c393cc')
+  with self.editor.section(p,'playback',QRectF(300,330,880,60)) as playback_map:
+   p.setBrush(QColor('#f5d9ef'));p.setPen(Qt.NoPen)
+   for x,direction in ((335,-1),(495,1)):
+    path=QPainterPath();path.moveTo(x-12*direction,348);path.lineTo(x+9*direction,360);path.lineTo(x-12*direction,372);path.closeSubpath();p.drawPath(path);p.drawRoundedRect(QRectF(x+11*direction-2,348,4,24),1,1)
+   if self.playing():
+    p.drawRoundedRect(QRectF(405,347,7,26),2,2);p.drawRoundedRect(QRectF(419,347,7,26),2,2)
+   else:
+    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
+   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
+  self.hit_regions={a:playback_map.mapRect(QRectF(*r)) for a,r in [('previous',(300,330,70,60)),('toggle',(380,330,70,60)),('next',(460,330,70,60)),('connections',(550,330,630,60))]}
+  lyrics=getattr(self,'lyrics_window',None)
+  notice_active=(self.notifications.visible() or self.editor.active) and not self.editor.has_custom('notifications')
+  if lyrics:
+   with self.editor.section(p,'lyrics',QRectF(1270,135,600,310)):
+    paint_lyrics(p,lyrics,QRectF(1270,135,600,310),self.accent)
+  with self.editor.section(p,'visualiser',QRectF(70,410,1080,190)) as visualiser_map:
+   for i,b in enumerate(self.bars):
+    base=505 if lyrics and notice_active else 600;h=max(2,min(1,b)*(95 if lyrics and notice_active else 190));c=QColor(self.accent);c.setAlpha(185);p.setBrush(c);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,base-h,5,h),2,2)
+  import re
+  gpu=re.match(r'\s*(\d+(?:\.\d+)?)\s*/\s*(.*)',str(self.stats[3]))
+  entries=[('CPU',self.stats[0],self.stats[2]),('GPU',float(gpu.group(1)) if gpu else float(str(self.stats[3]).rstrip('%')) if str(self.stats[3]).rstrip('%').isdigit() else None,gpu.group(2) if gpu else ''),('MEMORY',self.stats[1],'')]
+  with self.editor.section(p,'resources',QRectF(1300,(460 if lyrics else 220),530,(135 if lyrics else 180))) as resources_map:
+   for i,(label,value,detail) in enumerate(entries):
+    y=(460 if lyrics else 220)+i*(48 if lyrics else 72)
+    text(1300,y,160,30,label,15,'#a982b5')
+    reading=(f'{value:.0f}%' if value is not None else '—')+('  ·  '+str(detail) if detail and detail!='—' else '')
+    text(1480,y,350,30,reading,20)
+    p.fillRect(QRectF(1300,y+34,500,2),QColor('#352b40'))
+    if value is not None:p.fillRect(QRectF(1300,y+34,5*max(0,min(100,value)),2),self.accent)
   sync=self.sync_status
-  text(70,605,1100,30,'Game: '+sync.get('detected_game','Desktop')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),15,self.accent)
+  text(70,605,1100,30,('Game: '+sync.get('detected_game','Desktop') if sync.get('detected_game','Desktop')!='Desktop' else '')+('  •  Discord: '+self.discord.state.get('channel','') if self.discord.state.get('channel') else ''),13,'#a982b5')
   mode='COMBAT LOCKED' if sync.get('combat') else 'SCANNING' if sync.get('scanning') else 'IDLE' if sync else 'OFFLINE'
   accent='#F01886' if sync.get('combat') else '#B36CFF' if sync.get('scanning') else '#F478D7'
-  text(70,645,1100,35,'Update available — open System' if self.updater.asset else 'Sakura active • Blossom opens settings' if sync else 'Sakura active • Game Sync offline',15,'#a982b5')
+  if self.updater.asset:text(70,645,1100,35,'Update available — open System',13,self.accent)
+  elif not sync:text(70,645,1100,35,'Game Sync offline',13,'#a982b5')
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
-  p.setPen(QPen(self.accent,1.3));p.setBrush(QColor('#211329'));p.drawEllipse(QPointF(1830,655),36,36)
-  text(1808,624,60,62,'桜',25,self.accent)
+  self.settings_hit=p.transform().mapRect(paint_settings_petal(p,1850,665,22,self.accent))
+  slot=QRectF(70,515,1080,80) if lyrics else QRectF(1300,420,500,120)
+  slot=p.transform().mapRect(slot)
+  p.resetTransform();self.notifications.paint(p,slot,self.accent,self.editor)
+  p.scale(self.width()/1920,self.height()/720)
+  self.editor.overlay(p,self.accent)
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
