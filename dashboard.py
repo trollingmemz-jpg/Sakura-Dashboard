@@ -40,7 +40,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
-  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.start(100);self.publish_chroma()
+  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.start(100);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
   self.mobile=MobileCompanion(self)
@@ -49,7 +49,8 @@ class Dashboard(QWidget):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
   try:
-   self.write_setting('dashboard-chroma.json',dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars))
+   if enabled or self.chroma_was_enabled is not False:self.write_setting('dashboard-chroma.json',dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars))
+   self.chroma_was_enabled=enabled
    if not enabled:
     if self.chroma_process and self.chroma_process.poll() is not None:self.chroma_process=None
     return
@@ -59,7 +60,15 @@ class Dashboard(QWidget):
    interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
    if not interpreter.is_file():interpreter=Path(sys.executable)
    package=Path(__file__).resolve().parent/'optional/lighting.py'
-   self.chroma_process=subprocess.Popen([str(interpreter),str(package),'--visualiser'],start_new_session=True)
+   installed=Path.home()/'.local/share/sakura-lighting/lighting.py'
+   # The old standalone GUI has no IPC. Release only that exact user-owned process.
+   for proc in psutil.process_iter(['pid','cmdline','uids']):
+    try:
+     argv=proc.info.get('cmdline') or [];uids=proc.info.get('uids')
+     if uids and uids.real==os.getuid() and len(argv)>1 and argv[1]==str(installed) and '--visualiser' not in argv:
+      proc.terminate();self.chroma_error='Handing control over from standalone Sakura Lighting';return
+    except (psutil.NoSuchProcess,psutil.AccessDenied):continue
+   self.chroma_error='';self.chroma_process=subprocess.Popen([str(interpreter),str(package),'--visualiser'],start_new_session=True)
   except OSError as e:self.chroma_error=str(e)
  def theme_target(self):
   return QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
@@ -278,6 +287,15 @@ class Dashboard(QWidget):
   hardware_visualiser=QCheckBox('Enable media-reactive hardware lighting');hardware_visualiser.setChecked(bool(view.get('hardware_visualiser',False)));features.addWidget(hardware_visualiser)
   reactive_hint=QLabel('Automatically runs Sakura Lighting in the background. Keyboard, RAM and mouse react to local Spotify audio; album colours are used when enabled.');reactive_hint.setWordWrap(True);features.addWidget(reactive_hint)
   feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
+  reactive_status=QLabel();reactive_status.setWordWrap(True);features.addWidget(reactive_status)
+  def refresh_reactive():
+   if not self.display_options.get('hardware_visualiser',False):reactive_status.setText('Media lighting is disabled');return
+   try:
+    state=json.loads((Path.home()/'.config/sakura-lighting/visualiser-status.json').read_text())
+    if abs(time.time()-state['heartbeat'])<3:reactive_status.setText(state['status']);return
+   except (OSError,ValueError,KeyError,TypeError):pass
+   reactive_status.setText(self.chroma_error or 'Starting media lighting / waiting for hardware')
+  reactive_timer=QTimer(dlg);reactive_timer.timeout.connect(refresh_reactive);reactive_timer.start(500);refresh_reactive()
   install_btn=QPushButton('Install / update Sakura Lighting');launch_btn=QPushButton('Open Sakura Lighting');remove_btn=QPushButton('Uninstall Sakura Lighting')
   def refresh_feature():
    feature_status.setText('Installed' if installed.is_file() else 'Not installed');launch_btn.setEnabled(installed.is_file());remove_btn.setEnabled(installed.is_file())
