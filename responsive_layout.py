@@ -29,8 +29,7 @@ def paint_responsive(o):
    p.setPen(Qt.NoPen);p.setBrush(QColor('#352b40'));p.drawRoundedRect(bar,3,3)
    if val is not None:
     p.setBrush(accent);p.drawRoundedRect(QRectF(bar.x(),bar.y(),bar.width()*max(0,min(100,val))/100,bar.height()),3,3)
- item=o.player.get('item') or {};local=getattr(getattr(o,'media',None),'state',{})
- title=o.track[0] if local else item.get('name') or o.track[0];artist=o.track[1] if local else ', '.join(a.get('name','') for a in item.get('artists',[])) or o.track[1]
+ title,artist=o.now_playing()
  text(pad,pad,w*.5-pad,40,'桜 / SAKURA',min(25,w*.055),accent)
  with o.editor.section(p,'clock',QRectF(w*.5,pad,w*.5-pad,40)):
   text(w*.5,pad,w*.5-pad,40,time.strftime('%H:%M'),min(38,w*.075),align=Qt.AlignRight)
