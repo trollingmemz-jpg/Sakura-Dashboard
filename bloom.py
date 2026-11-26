@@ -4,14 +4,14 @@ from PySide6.QtGui import QPainter,QPainterPath,QColor,QPen,QLinearGradient,QRad
 from inline_panel import InlinePanel
 
 class Bloom(InlinePanel):
- def __init__(self,parent,accent,labels=None):
+ def __init__(self,parent,accent,labels=None,main_menu=False):
   super().__init__(parent)
   self.setWindowTitle('Sakura Bloom')
   self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
   self.setAutoFillBackground(False)
   self.setStyleSheet('background: transparent; border: none;')
   self.setMouseTracking(True);self.accent=QColor(accent);self.labels=list(labels) if labels is not None else ['Lighting','Games','Connections','Appearance','System']
-  self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None;self.submenu=labels is not None
+  self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None;self.submenu=labels is not None and not main_menu
   self.timer=QTimer(self);self.timer.timeout.connect(self.update);self.timer.start(16)
   self.path=QPainterPath();self.path.moveTo(0,74)
   self.path.cubicTo(-28,46,-63,6,-63,-29);self.path.cubicTo(-63,-65,-25,-79,0,-63)
@@ -33,7 +33,7 @@ class Bloom(InlinePanel):
    self.dismiss();return True
   return super().eventFilter(obj,event)
  def geometry_at(self,i,elapsed):
-  n=len(self.labels);step=.12 if n==5 else .08
+  n=len(self.labels);step=.12 if not self.submenu else .08
   t=max(0,min(1,(elapsed-i*step)/step))
   if self.closing is not None:t=1-max(0,min(1,(time.monotonic()-self.closing-(n-1-i)*.045)/.12))
   u=(1-math.cos(math.pi*t))/2;a=-math.pi/2+i*2*math.pi/n
@@ -66,7 +66,7 @@ class Bloom(InlinePanel):
   p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing)
   p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
   elapsed=time.monotonic()-self.started
-  if self.closing is not None and time.monotonic()-self.closing>=.30:
+  if self.closing is not None and time.monotonic()-self.closing>=max(.30,(len(self.labels)-1)*.045+.12):
    QTimer.singleShot(0,lambda:self.done(1 if self.choice==-2 else self.choice+2 if self.choice>=0 else 0));return
   primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
   for i,label in enumerate(self.labels):
@@ -92,7 +92,7 @@ class Bloom(InlinePanel):
      p.restore()
    p.restore()
   for i,label in enumerate(self.labels):
-   step=.12 if len(self.labels)==5 else .08
+   step=.12 if not self.submenu else .08
    if elapsed<(i+1)*step:continue
    if self.closing is not None and time.monotonic()-self.closing>(len(self.labels)-1-i)*.045:continue
    a=-math.pi/2+i*2*math.pi/len(self.labels);x=92*math.cos(a);y=92*math.sin(a)
