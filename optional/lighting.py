@@ -42,6 +42,7 @@ def mouse_write(rgb):
     raise RuntimeError('Harpoon not found')
 def main():
     from PySide6.QtCore import Qt,QTimer
+    from PySide6.QtDBus import QDBusConnection,QDBusInterface
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QApplication,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QComboBox,QSlider,QColorDialog,QCheckBox,QMessageBox
     app=QApplication(sys.argv); CONFIG.mkdir(parents=True,exist_ok=True)
@@ -67,11 +68,24 @@ def main():
     sync=QPushButton('Match all colours to keyboard');sync.clicked.connect(lambda:[paint(b,QColor(rows['keyboard'][1].text())) for _,b in rows.values()]);layout.addWidget(sync)
     mode=QComboBox();mode.addItems(['Static','Breathing','Rainbow','Blackout']);mode.setCurrentText(cfg.get('mode','Static'));layout.addWidget(mode)
     level=QLabel();brightness=QSlider(Qt.Orientation.Horizontal);brightness.setRange(0,100);brightness.setValue(cfg.get('brightness',100));brightness.valueChanged.connect(lambda v:level.setText('Brightness  '+str(v)+'%'));level.setText('Brightness  '+str(brightness.value())+'%');layout.addWidget(level);layout.addWidget(brightness)
+    dim=QCheckBox('Dim existing lighting when PC locks');dim.setChecked(cfg.get('dim_on_lock',True));layout.addWidget(dim)
+    dimlevel=QSlider(Qt.Orientation.Horizontal);dimlevel.setRange(0,100);dimlevel.setValue(cfg.get('locked_brightness',15))
+    dimlabel=QLabel('Locked brightness multiplier: '+str(dimlevel.value())+'%');dimlevel.valueChanged.connect(lambda v:dimlabel.setText('Locked brightness multiplier: '+str(v)+'%'));layout.addWidget(dimlabel);layout.addWidget(dimlevel)
     status=QLabel('Idle — no hardware writes');status.setWordWrap(True);layout.addWidget(status)
     buttons=QHBoxLayout();start=QPushButton('Start lighting');stop=QPushButton('Release control');stop.setEnabled(False);buttons.addWidget(start);buttons.addWidget(stop);layout.addLayout(buttons)
     state={'active':False,'profile':{},'status':'Idle — no hardware writes'};halt=threading.Event()
+    screen=QDBusInterface('org.freedesktop.ScreenSaver','/ScreenSaver','org.freedesktop.ScreenSaver',QDBusConnection.sessionBus())
+    screen.setTimeout(250)
+    state['locked']=False
+    def check_lock():
+        reply=screen.call('GetActive')
+        if reply.arguments() and isinstance(reply.arguments()[0],bool):state['locked']=reply.arguments()[0]
+    locktimer=QTimer(win);locktimer.timeout.connect(check_lock);locktimer.start(750);check_lock()
+    remote=CONFIG/'mobile-command.json'
+    mobile_status=CONFIG/'mobile-status.json'
+    offsets={k:cfg.get(k,{}).get('brightness',100) for k in rows}
     def snapshot():
-        p={k:{'enabled':a.isChecked(),'color':b.text()} for k,(a,b) in rows.items()};p.update(mode=mode.currentText(),brightness=brightness.value());state['profile']=p
+        p={k:{'enabled':a.isChecked(),'color':b.text(),'brightness':offsets[k]} for k,(a,b) in rows.items()};p.update(mode=mode.currentText(),brightness=brightness.value(),dim_on_lock=dim.isChecked(),locked_brightness=dimlevel.value());state['profile']=p
         return p
     def begin():
         if not released(): QMessageBox.warning(win,'Release Game Sync','Set Dashboard lighting mode to Off and save first.');return
@@ -82,7 +96,25 @@ def main():
         state['active']=False;start.setEnabled(True);stop.setEnabled(False)
     start.clicked.connect(begin);stop.clicked.connect(end)
     def tick():
-        snapshot();status.setText(state['status'])
+        if remote.exists():
+            claimed=remote.with_suffix('.processing')
+            try:
+                remote.replace(claimed)
+                cmd=read(claimed,{})
+                keys=['ram1','ram2'] if cmd.get('device')=='ram' else [cmd.get('device')]
+                if state['active'] and released():
+                    for k in keys:
+                        if k in rows:
+                            paint(rows[k][1],QColor(cmd['color']))
+                            offsets[k]=max(0,min(100,int(cmd['brightness'])))
+            except (OSError,KeyError,TypeError,ValueError):pass
+            finally:claimed.unlink(missing_ok=True)
+        p=snapshot();status.setText(state['status'])
+        if state['active'] and released():
+            payload=dict(p,heartbeat=time.time())
+            if time.monotonic()-state.get('published',0)>=1:
+                save(mobile_status,payload);state['published']=time.monotonic()
+        else:mobile_status.unlink(missing_ok=True)
         if not state['active'] and not start.isEnabled(): end()
     timer=QTimer(win);timer.timeout.connect(tick);timer.start(150)
     def worker():
@@ -93,12 +125,15 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
+        multiplier=1.0
         while not halt.wait(.12):
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
                 continue
             p=state['profile'];now=time.monotonic();errors=[]
+            target=p.get('locked_brightness',15)/100 if state['locked'] and p.get('dim_on_lock',True) else 1.0
+            multiplier += max(-.12,min(.12,target-multiplier))
             if client is None and now>=retry:
                 retry=now+5
                 try:
@@ -111,7 +146,7 @@ def main():
                 except Exception as e:disconnect();errors.append(str(e))
             for k in rows:
                 if not p.get(k,{}).get('enabled'):continue
-                h=p[k]['color'];rgb=frame(tuple(int(h[i:i+2],16) for i in (1,3,5)),p['mode'],p['brightness'],now)
+                h=p[k]['color'];rgb=frame(tuple(int(h[i:i+2],16) for i in (1,3,5)),p['mode'],p['brightness']*multiplier*p[k].get('brightness',100)/100,now)
                 if last.get(k)==rgb:continue
                 try:
                     if k=='mouse':mouse_write(rgb)
@@ -127,7 +162,7 @@ def main():
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
-        halt.set();state['active']=False;save(CONFIG/'profile.json',snapshot())
+        halt.set();state['active']=False;mobile_status.unlink(missing_ok=True);save(CONFIG/'profile.json',snapshot())
     app.aboutToQuit.connect(close);win.show();app.exec();thread.join(.5)
 if __name__=='__main__':
     if '--install' in sys.argv:install()
