@@ -30,6 +30,3 @@ class InlinePanel(QWidget):
    scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QScrollArea.Shape.NoFrame);scroll.setWidget(body);outer.addWidget(scroll)
   self.host.installEventFilter(self);self.fit();self.show();self.raise_();self.setFocus()
   self.loop=QEventLoop();self.loop.exec();self.loop=None;self.host.removeEventFilter(self);self.hide();self.deleteLater();return self.result_code
- def keyPressEvent(self,e):
-  if e.key()==Qt.Key.Key_Escape:self.reject()
-  else:super().keyPressEvent(e)
