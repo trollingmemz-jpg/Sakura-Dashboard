@@ -496,9 +496,9 @@ class Dashboard(QWidget):
  def open_lyrics(self):
   panel=getattr(self,'lyrics_window',None)
   if panel is not None:
-   panel.close();return
+   self.lyrics_window=None;panel.close();self.update();return
   panel=LyricsWindow(self);self.lyrics_window=panel
-  panel.destroyed.connect(lambda: setattr(self,'lyrics_window',None));panel.show()
+  self.update()
  def keyPressEvent(self,e):
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
   if e.key()==Qt.Key_F4 or (e.key()==Qt.Key_Escape and self.media_page):self.open_media();return
@@ -560,8 +560,12 @@ class Dashboard(QWidget):
   else:
    path=QPainterPath();path.moveTo(405,345);path.lineTo(430,360);path.lineTo(405,375);path.closeSubpath();p.drawPath(path)
   text(550,330,630,60,(self.player.get('device') or {}).get('name','Spotify devices'),18,self.accent)
+  lyrics=getattr(self,'lyrics_window',None)
+  if lyrics:
+   for j,line in enumerate(lyrics.current_lines()):
+    text(70,394+j*31,1100,31,line,22 if j==1 else 15,self.accent if j==1 else '#a982b5',600 if j==1 else 400)
   for i,b in enumerate(self.bars):
-   h=max(3,min(1,b)*190);p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
+   h=max(3,min(1,b)*(100 if lyrics else 190));p.setBrush(self.accent);p.setPen(Qt.NoPen);p.drawRoundedRect(QRectF(70+i*13.5,600-h,8,h),4,4)
   p.setPen(QPen(QColor('#583456'),1));p.drawLine(1240,150,1240,620)
   for i,(label,value,detail) in enumerate([('CPU',self.stats[0],self.stats[2]),('GPU',None,self.stats[3]),('MEMORY',self.stats[1],'')]):
    y=160+i*150;text(1300,y,530,35,label,19,'#c393cc');text(1300,y+40,530,65,(f'{value:.0f}%  '+detail) if value is not None else detail,34)
