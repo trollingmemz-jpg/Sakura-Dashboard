@@ -1,11 +1,12 @@
 {
   "manifest_version": 2,
   "name": "Sakura Media Connector",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Opt-in local anime and manga history for Sakura",
   "permissions": [
     "storage",
-    "http://127.0.0.1:8770/*"
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "scripts": [
