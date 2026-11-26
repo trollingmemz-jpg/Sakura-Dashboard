@@ -1,4 +1,4 @@
-import sys, math, random, time, subprocess, threading, os, glob, json
+import sys, math, random, time, subprocess, threading, os, glob, json, socket, colorsys
 from pathlib import Path
 from PySide6.QtCore import Qt,QTimer,QRectF
 from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
@@ -27,7 +27,7 @@ class Dashboard(QWidget):
   self.sync_root.mkdir(parents=True,exist_ok=True);self.media_bridge=MediaBridge(self.sync_root);self.media_bridge.start();self.media_page=None
   self.discord=DiscordConnection();self.game_profile={};self.hit_regions={}
   self.connect=Connect(self.sync_root)
-  self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
+  self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.art_palette=[];self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
@@ -35,12 +35,12 @@ class Dashboard(QWidget):
   self.capture.readyReadStandardError.connect(self.audio_error)
   self.audio_timer = QTimer(self)
   self.audio_timer.timeout.connect(self.update_spectrum)
-  self.audio_timer.setTimerType(Qt.TimerType.PreciseTimer);self.audio_timer.start(33)
+  self.audio_timer.setTimerType(Qt.TimerType.PreciseTimer);self.audio_timer.start(17)
   self.timer = QTimer(self)
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
-  self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(33);self.publish_chroma()
+  self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   threading.Thread(target=self.poll, daemon=True).start()
   self.mobile=MobileCompanion(self)
@@ -49,7 +49,12 @@ class Dashboard(QWidget):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
   try:
-   if enabled or self.chroma_was_enabled is not False:self.write_setting('dashboard-chroma.json',dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars))
+   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30))
+   if self.chroma_was_enabled!=enabled or (enabled and time.monotonic()-self.chroma_heartbeat>=.5):
+    self.write_setting('dashboard-chroma.json',payload);self.chroma_heartbeat=time.monotonic()
+   if enabled:
+    try:self.chroma_socket.sendto(json.dumps(payload,separators=(',',':')).encode(),str(Path.home()/'.config/sakura-lighting/chroma.sock'))
+    except OSError:pass
    self.chroma_was_enabled=enabled
    if not enabled:
     if self.chroma_process and self.chroma_process.poll() is not None:self.chroma_process=None
@@ -243,7 +248,13 @@ class Dashboard(QWidget):
     image=QImage.fromData(raw)
     if not image.isNull():
      small=image.scaled(24,24);colors=[small.pixelColor(x,y) for x in range(24) for y in range(24)];colors.sort(key=lambda c:c.saturationF()*min(1,c.valueF()*2),reverse=True);c=colors[:100];avg=QColor(*(int(sum(getattr(v,k)() for v in c)/len(c)) for k in ('red','green','blue')));h,s,v,_=avg.getHsvF();self.art_accent=QColor.fromHsvF(max(0,h),max(.35,min(.8,s)),.95);self.art=image;self.art_url=url
-   if not url:self.art=QImage();self.art_url='';self.art_accent=QColor('#f478d7')
+     buckets={}
+     for pixel in colors:
+      ph,ps,pv,_=pixel.getHsvF()
+      if ph<0 or ps<.25 or pv<.18:continue
+      bin=int(ph*18)%18;buckets[bin]=buckets.get(bin,0)+ps*pv
+     self.art_palette=[QColor.fromHsvF((k+.5)/18,.95,.95).name() for k in sorted(buckets,key=buckets.get,reverse=True)[:4]]
+   if not url:self.art=QImage();self.art_url='';self.art_accent=QColor('#f478d7');self.art_palette=[]
   except (OSError,ValueError,TypeError,KeyError):pass
  def open_rgb_settings(self):
   self.open_settings(1)
@@ -285,6 +296,9 @@ class Dashboard(QWidget):
   interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
   if not interpreter.is_file():interpreter=Path(sys.executable)
   hardware_visualiser=QCheckBox('Enable media-reactive hardware lighting');hardware_visualiser.setChecked(bool(view.get('hardware_visualiser',False)));features.addWidget(hardware_visualiser)
+  chroma_effect=QComboBox();chroma_effect.addItems(['Spectrum','Bass shockwave','Ambient flow','Album palette','Automatic']);chroma_effect.setCurrentText(view.get('chroma_effect','Spectrum'));features.addWidget(QLabel('Media lighting effect'));features.addWidget(chroma_effect)
+  chroma_rate=QComboBox();chroma_rate.addItems(['30 FPS — compatibility','60 FPS — low latency']);chroma_rate.setCurrentIndex(1 if view.get('chroma_rate',30)==60 else 0);features.addWidget(chroma_rate)
+  chroma_adaptive=QCheckBox('Adaptive audio sensitivity');chroma_adaptive.setChecked(bool(view.get('chroma_adaptive',True)));features.addWidget(chroma_adaptive)
   reactive_hint=QLabel('Automatically runs Sakura Lighting in the background. Keyboard, RAM and mouse react to local Spotify audio; album colours are used when enabled.');reactive_hint.setWordWrap(True);features.addWidget(reactive_hint)
   feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
   reactive_status=QLabel();reactive_status.setWordWrap(True);features.addWidget(reactive_status)
@@ -354,7 +368,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked()));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked()));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -420,6 +434,7 @@ class Dashboard(QWidget):
   self.sync_timer.stop()
   self.audio_timer.stop()
   self.chroma_timer.stop()
+  self.chroma_socket.close()
   try:self.write_setting('dashboard-chroma.json',dict(enabled=False,heartbeat=time.time()))
   except OSError:pass
   if self.chroma_process and self.chroma_process.poll() is None:
