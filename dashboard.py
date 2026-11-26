@@ -23,6 +23,7 @@ from PySide6.QtGui import QPainterPath
 from PySide6.QtGui import QImage
 from PySide6.QtCore import QPointF
 from local_spectrum import LiveSpectrum, RATE
+from game_autohide import AutoHide
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
@@ -43,6 +44,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.game_autohide=AutoHide(self)
   self.notifications=Notifications(self)
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
@@ -360,6 +362,7 @@ class Dashboard(QWidget):
   try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
   except (OSError,ValueError):view={}
   if not isinstance(view,dict):view={}
+  auto_hide=QCheckBox();auto_hide.setChecked(bool(view.get('game_autohide',True)));dform.addRow('Hide dashboard when a game is on this monitor',auto_hide)
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
@@ -450,7 +453,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
