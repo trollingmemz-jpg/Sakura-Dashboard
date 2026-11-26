@@ -7,6 +7,8 @@ def main():
   import PySide6,psutil,numpy,soundcard,cv2,PIL,openrgb
   from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
   from winrt.windows.storage.streams import DataReader
+  from winrt.windows.ui.notifications.management import UserNotificationListener
+  import bloom,layout_editor,desktop_notifications,live_lyrics,responsive_layout,windows_notifications
   return
  try:
   if '--game-sync' in sys.argv:
