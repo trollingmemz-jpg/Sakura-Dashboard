@@ -7,12 +7,18 @@ class Bloom(InlinePanel):
  def __init__(self,parent,accent):
   super().__init__(parent)
   self.setWindowTitle('Sakura Bloom')
+  self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground,False)
+  self.setAutoFillBackground(False)
+  self.setStyleSheet('background: transparent; border: none;')
   self.setMouseTracking(True);self.accent=QColor(accent);self.labels=['Lighting','Games','Connections','Appearance','System']
   self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None
   self.timer=QTimer(self);self.timer.timeout.connect(self.update);self.timer.start(16)
   self.path=QPainterPath();self.path.moveTo(0,74)
   self.path.cubicTo(-28,46,-63,6,-63,-29);self.path.cubicTo(-63,-65,-25,-79,0,-63)
   self.path.cubicTo(25,-79,63,-65,63,-29);self.path.cubicTo(63,6,28,46,0,74);self.path.closeSubpath()
+ def fit(self):
+  side=max(1,min(int(self.host.height()*.61),int(self.host.width()*.85)))
+  self.setGeometry((self.host.width()-side)//2,(self.host.height()-side)//2,side,side)
  def coords(self,e):
   scale=min(self.width(),self.height())/360
   return QPointF((e.position().x()-self.width()/2)/scale,(e.position().y()-self.height()/2)/scale)
@@ -27,7 +33,7 @@ class Bloom(InlinePanel):
   self.closing=time.monotonic()
  def paintEvent(self,e):
   p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing)
-  p.fillRect(self.rect(),QColor('#100b20'));p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
+  p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
   elapsed=time.monotonic()-self.started
   if self.closing is not None and time.monotonic()-self.closing>=.30:
    QTimer.singleShot(0,lambda:self.done(self.choice+2 if self.choice>=0 else 0));return
