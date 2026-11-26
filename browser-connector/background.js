@@ -8,7 +8,7 @@ api.runtime.onMessage.addListener((message,sender)=>{
   const {token}=await api.storage.local.get("token");
   if(!token)return;
   try{
-   const response=await fetch("http://127.0.0.1:8765/media",{method:"POST",headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(message.data)});
+   const response=await fetch("http://127.0.0.1:8770/media",{method:"POST",headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(message.data)});
    if(response.ok){const data=await response.json();if(data.command)await api.tabs.sendMessage(sender.tab.id,{command:data.command});}
   }catch(e){}
  })();
