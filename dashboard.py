@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QApplication,QWidget,QDialog,QVBoxLayout,QFormLayo
 from PySide6.QtCore import QProcess
 import psutil
 import urllib.request
-from bloom import Bloom
+from bloom import Bloom, paint_settings_petal
 from spotify_connect import Connect
 from inline_panel import InlinePanel
 from mobile_panel import MobileCompanion
@@ -523,7 +523,7 @@ class Dashboard(QWidget):
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
   elif 1120<=x<=1260 and 640<=y<=695:self.open_media()
-  elif math.hypot(x-1830,y-655)<45:self.bloom_menu()
+  elif math.hypot(x-1850,y-665)<32:self.bloom_menu()
   elif 300<=x<=370 and 330<=y<=390:self.command('previous')
   elif 380<=x<=450 and 330<=y<=390:self.command('pause' if self.playing() else 'play')
   elif 460<=x<=530 and 330<=y<=390:self.command('next')
@@ -579,8 +579,7 @@ class Dashboard(QWidget):
   text(70,645,1100,35,'Sakura active' if sync else 'Game Sync offline',15,'#a982b5')
   text(1120,640,140,45,'MEDIA ↗',18,self.accent)
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
-  p.setPen(QPen(self.accent,1.3));p.setBrush(QColor('#211329'));p.drawEllipse(QPointF(1830,655),36,36)
-  text(1808,624,60,62,'桜',25,self.accent)
+  paint_settings_petal(p,1850,665,22,self.accent)
   if self.circle_points:
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
