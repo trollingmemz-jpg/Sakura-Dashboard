@@ -13,8 +13,22 @@ def paint_responsive(o):
  def button(x,y,ww,hh,label,action):
   r=QRectF(x,y,ww,hh);p.setPen(QPen(accent,1));p.setBrush(QColor('#211329'));p.drawRoundedRect(r,8,8);text(x+4,y,ww-8,hh,label,min(18,hh*.45),accent,Qt.AlignHCenter);o.hit_regions[action]=r
  def stats(x,y,ww,hh):
-  for i,(label,val) in enumerate([('CPU',f'{o.stats[0]:.0f}%'),('GPU',o.stats[3]),('Memory',f'{o.stats[1]:.0f}%')]):
-   yy=y+i*hh/3;text(x,yy,ww*.48,hh/3,label,min(20,hh/8),'#c393cc');text(x+ww*.48,yy,ww*.52,hh/3,val,min(29,hh/6),align=Qt.AlignRight)
+  import re
+  gpu=str(o.stats[3]);match=re.match(r'\s*(\d+(?:\.\d+)?)\s*/\s*(.*)',gpu)
+  gpu_pct=float(match.group(1)) if match else None
+  gpu_temp=match.group(2) if match else '—'
+  entries=[('CPU',o.stats[0],str(o.stats[2])),('GPU',gpu_pct,gpu_temp),('MEMORY',o.stats[1],'')]
+  row=min(hh/3, max(42,min(100,h*.105)))
+  for i,(label,val,detail) in enumerate(entries):
+   yy=y+i*row
+   label_size=max(10,min(19,row*.23));value_size=max(12,min(29,row*.35))
+   text(x,yy,ww*.43,row*.43,label,label_size,'#c393cc')
+   reading=(f'{val:.0f}%' if val is not None else '—')+('  •  '+detail if detail and detail!='—' else '')
+   text(x+ww*.43,yy,ww*.57,row*.43,reading,value_size,align=Qt.AlignRight)
+   bar=QRectF(x,yy+row*.60,ww,max(3,min(6,row*.08)))
+   p.setPen(Qt.NoPen);p.setBrush(QColor('#49334e'));p.drawRoundedRect(bar,3,3)
+   if val is not None:
+    p.setBrush(accent);p.drawRoundedRect(QRectF(bar.x(),bar.y(),bar.width()*max(0,min(100,val))/100,bar.height()),3,3)
  item=o.player.get('item') or {};local=getattr(getattr(o,'media',None),'state',{})
  title=o.track[0] if local else item.get('name') or o.track[0];artist=o.track[1] if local else ', '.join(a.get('name','') for a in item.get('artists',[])) or o.track[1]
  text(pad,pad,w*.5-pad,40,'桜 / SAKURA',min(25,w*.055),accent);text(w*.5,pad,w*.5-pad,40,time.strftime('%H:%M'),min(38,w*.075),align=Qt.AlignRight)
@@ -22,28 +36,32 @@ def paint_responsive(o):
  if portrait:
   aw=min(w-2*pad,space*.34,360);ax=(w-aw)/2;ay=top
   tx=pad;ty=ay+aw+8;tw=w-2*pad
-  sy=ty+110;sh=max(45,(bottom-sy)*.58);sx=pad;sw=tw
+  sy=ty+max(110,134*max(.75,min(1.45,h/720)));sh=max(45,(bottom-sy)*.58);sx=pad;sw=tw
   vy=sy+sh+4;vh=max(0,bottom-vy-38);vx=pad;vw=tw
  else:
-  aw=min(space*.48,w*.20);ax=pad;ay=top
+  aw=min(space*.32,w*.16);ax=pad;ay=top
   tx=ax+aw+pad;ty=top;tw=max(50,w*.59-tx)
   sx=w*.64;sy=top;sw=w-pad-sx;sh=space*.70
-  vx=pad;vy=top+max(aw,110)+16;vw=w*.59-pad;vh=max(0,bottom-vy-38)
+  vx=pad;vy=top+max(aw,134*max(.75,min(1.45,h/720)))+16;vw=w*.59-pad;vh=max(0,bottom-vy-38)
  art=o.art
  if not art.isNull():
   scaled=art.scaled(int(aw),int(aw),Qt.KeepAspectRatio,Qt.SmoothTransformation);p.drawImage(QPointF(ax+(aw-scaled.width())/2,ay+(aw-scaled.height())/2),scaled)
  else:p.fillRect(QRectF(ax,ay,aw,aw),QColor('#39253e'))
- text(tx,ty,tw,22,'NOW PLAYING',13,accent);text(tx,ty+24,tw,32,title,min(28,tw*.085));text(tx,ty+56,tw,22,artist,min(17,tw*.06),'#c393cc')
- bw=min(70,(tw-12)/3)
- for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+82,bw,30,label,action)
+  unit=max(.75,min(1.45,h/720))
+ text(tx,ty,tw,24*unit,'NOW PLAYING',15*unit,accent)
+ text(tx,ty+26*unit,tw,40*unit,title,min(36*unit,tw*.10))
+ text(tx,ty+68*unit,tw,28*unit,artist,min(22*unit,tw*.07),'#c393cc')
+ bw=min(84*unit,(tw-12)/3)
+ for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+98*unit,bw,36*unit,label,action)
  lyrics=getattr(o,'lyrics_window',None)
  if lyrics:
   if portrait:
-   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh),accent)
+   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh*.56),accent)
+   stats(sx,sy+sh*.56,sw,sh*.44)
   else:
    lyric_h=space*.52
    paint_lyrics(p,lyrics,QRectF(sx,sy,sw,lyric_h),accent)
-   stats(sx,sy+lyric_h+pad*.4,sw,max(45,min(space*.23,bottom-sy-lyric_h-pad*.4-30)))
+   stats(sx,sy+lyric_h+pad*.4,sw,max(45,min(space*.36,bottom-sy-lyric_h-pad*.4-30)))
  else:stats(sx,sy,sw,sh)
  if vh>8:
   for i,b in enumerate(o.bars):
