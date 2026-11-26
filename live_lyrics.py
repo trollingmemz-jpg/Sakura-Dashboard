@@ -2,8 +2,8 @@
 import bisect, json, re, subprocess, threading, time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from PySide6.QtCore import QObject, Qt, QRectF, QPointF
-from PySide6.QtGui import QColor, QFont, QPainterPath, QPen
+from PySide6.QtCore import QObject, Qt, QRectF
+from PySide6.QtGui import QColor, QFont
 
 def parse_lrc(raw):
     result=[]
@@ -52,81 +52,48 @@ class LyricsWindow(QObject):
 
     def current_frame(self):
         with self.lock:result=self.result
-        if not result:
-            return ["","Waiting for local Spotify playback",""], -1
+        if not result:return None,["Waiting for local Spotify playback"],0
         title,lyrics,position,sampled,playing=result
-        if not lyrics:return [title,"No synced lyrics available",""], -1
+        if not lyrics:return None,["No synced lyrics available"],0
         now=position+(min(1.5,time.monotonic()-sampled) if playing else 0)
         index=bisect.bisect_right([t for t,_ in lyrics],now)-1
-        lines=[lyrics[j][1] if 0<=j<len(lyrics) else "" for j in range(index-1,index+2)]
-        if index<0:return lines,-1
-        start=lyrics[index][0]
-        end=lyrics[index+1][0] if index+1<len(lyrics) else start+4
-        words=lines[1].split()
-        weights=[max(1,len(w)) for w in words]
-        progress=max(0,min(.999,(now-start)/max(.2,end-start)))
-        word=bisect.bisect_right([sum(weights[:i+1]) for i in range(len(weights))],progress*sum(weights))
-        return lines,word if words else -1
-
-    def current_lines(self):
-        return self.current_frame()[0]
+        return (title,id(lyrics)),[line for _,line in lyrics],index
 
     def close(self):
         self.stop.set()
         self.deleteLater()
 
 def paint_lyrics(p, model, rect, accent):
-    """Render three lines without a panel border; highlight estimated active word."""
+    """Smoothly scroll between timestamped lines, without word effects."""
     if rect.width()<40 or rect.height()<40:return
-    lines,active=model.current_frame()
+    key,lines,index=model.current_frame()
+    now=time.monotonic()
+    old=getattr(model,"_scroll",None)
+    if old is None or old[0]!=key or abs(index-old[1])>2:
+        old=(key,index,float(index),now)
+    elif index!=old[1]:
+        t=min(1.,(now-old[3])/.38)
+        eased=t*t*(3-2*t)
+        old=(key,index,old[2]+(old[1]-old[2])*eased,now)
+    model._scroll=old
+    t=min(1.,(now-old[3])/.38)
+    center=old[2]+(index-old[2])*t*t*(3-2*t)
     p.save()
     p.setClipRect(rect)
-    width=rect.width()-20
-    center=rect.center()
-    size=max(12,min(32,int(width/15),int(rect.height()/8)))
-    for i,line in enumerate(lines):
-        if not line:continue
+    spacing=rect.height()/3.1
+    for j in range(max(0,int(center)-2),min(len(lines),int(center)+4)):
+        distance=abs(j-center)
+        strength=max(0.,1-distance)
+        opacity=max(0.,min(1.,(1.55-distance)*1.5))
+        if not opacity:continue
         f=QFont("Sans Serif")
-        f.setPixelSize(size if i==1 else max(10,int(size*.65)))
-        f.setBold(i==1)
+        f.setPixelSize(max(10,int(min(32,spacing*.38)*( .72+.28*strength))))
+        f.setBold(strength>.5)
         p.setFont(f)
-        if i!=1:
-            p.setPen(QColor("#a982b5"))
-            yy=center.y()+(i-1)*rect.height()*.29
-            p.drawText(QRectF(rect.x()+10,yy-size,width,size*2),Qt.AlignCenter|Qt.TextWordWrap,line)
-            continue
-        words=line.split()
-        if not words:continue
-        fm=p.fontMetrics()
-        rows=[];row=[];used=0
-        for j,word in enumerate(words):
-            ww=fm.horizontalAdvance(word)
-            if row and used+ww>width:
-                rows.append(row);row=[];used=0
-            row.append((j,word,ww));used+=ww+fm.horizontalAdvance(" ")
-        if row:rows.append(row)
-        while len(rows)*fm.height()>rect.height()*.46 and f.pixelSize()>10:
-            f.setPixelSize(f.pixelSize()-1);p.setFont(f);fm=p.fontMetrics()
-            rows=[];row=[];used=0
-            for j,word in enumerate(words):
-                ww=fm.horizontalAdvance(word)
-                if row and used+ww>width:rows.append(row);row=[];used=0
-                row.append((j,word,ww));used+=ww+fm.horizontalAdvance(" ")
-            if row:rows.append(row)
-        gap=fm.horizontalAdvance(" ")
-        for ri,row in enumerate(rows):
-            total=sum(w for _,_,w in row)+gap*(len(row)-1)
-            x=center.x()-total/2
-            y=center.y()-len(rows)*fm.height()/2+fm.ascent()+ri*fm.height()
-            for j,word,ww in row:
-                if j==active:
-                    path=QPainterPath();path.addText(QPointF(x,y),f,word)
-                    for radius,alpha in ((10,18),(7,30),(4,65)):
-                        glow=QColor(accent);glow.setAlpha(alpha)
-                        p.strokePath(path,QPen(glow,radius))
-                    p.fillPath(path,QColor("#fff4fc"))
-                else:
-                    p.setPen(QColor(accent) if j<active else QColor("#e5d0e2"))
-                    p.drawText(QPointF(x,y),word)
-                x+=ww+gap
+        muted=QColor("#a982b5")
+        color=QColor(round(muted.red()+(accent.red()-muted.red())*strength),round(muted.green()+(accent.green()-muted.green())*strength),round(muted.blue()+(accent.blue()-muted.blue())*strength))
+        color.setAlphaF(opacity)
+        p.setPen(color)
+        y=rect.center().y()+(j-center)*spacing
+        p.drawText(QRectF(rect.x()+8,y-spacing/2,rect.width()-16,spacing),Qt.AlignCenter|Qt.TextWordWrap,lines[j])
     p.restore()
