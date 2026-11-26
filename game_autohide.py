@@ -30,10 +30,14 @@ class AutoHide(QObject):
  def restore(self):
   if self.hidden:
    self.hidden=False
+   if getattr(self.window,'tray_hidden',False):return
    self.window.setAttribute(__import__('PySide6.QtCore',fromlist=['Qt']).Qt.WidgetAttribute.WA_ShowWithoutActivating,True)
    self.window.show()
  def tick(self):
   w=self.window
+  if getattr(w,'tray_hidden',False):
+   self.hidden=False;self.misses=0;return
+  if getattr(w,'panel_active',False) or getattr(w,'tray_restore_until',0)>__import__('time').monotonic():return
   if not w.display_options.get('game_autohide',True):
    self.restore();return
   name=w.sync_status.get('detected_game','Desktop')
