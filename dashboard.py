@@ -28,7 +28,7 @@ class Dashboard(QWidget):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1920,720); self.setWindowFlags(Qt.Window|Qt.FramelessWindowHint); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
   self.sync_root=Path.home()/'.config/sakura-game-sync'; self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
   self.sync_root.mkdir(parents=True,exist_ok=True);self.media_bridge=MediaBridge(self.sync_root);self.media_bridge.start();self.media_page=None
-  self.discord=DiscordConnection();self.game_profile={};self.hit_regions={}
+  self.discord=DiscordConnection();self.game_profile={};self.hit_regions={};self.settings_hit=QRectF()
   self.connect=Connect(self.sync_root)
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.art_palette=[];self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum()
@@ -171,13 +171,29 @@ class Dashboard(QWidget):
  def bloom_menu(self):
   if self.panel_active:return
   self.panel_active=True
-  try:choice=Bloom(self,self.accent).exec()-2
+  action=None
+  try:
+   if self.editor.active:
+    options=[('Finish',self.editor.toggle),('Reset layout',self.editor.reset),('Cancel',lambda:None)]
+   else:
+    choice=Bloom(self,self.accent).exec()-2
+    groups=[
+     [('Lighting settings',lambda:self.open_settings(1)),('Optional features',lambda:self.open_settings(3)),('Back',self.bloom_again)],
+     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings),('Back',self.bloom_again)],
+     [('Spotify',self.open_player),('Discord',self.open_discord),('Media',self.open_media),('Back',self.bloom_again)],
+     [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen),('Back',self.bloom_again)],
+     [('System settings',self.open_system),('Exit Sakura',self.close),('Back',self.bloom_again)]
+    ]
+    if choice<0:return
+    options=groups[choice]
+   selection=Bloom(self,self.accent,[label for label,fn in options]).exec()-2
+   if 0<=selection<len(options):action=options[selection][1]
   finally:self.panel_active=False
-  if choice==0:self.open_settings(1)
-  elif choice==1:self.open_settings(0)
-  elif choice==2:self.open_player()
-  elif choice==3:self.open_settings(2)
-  elif choice==4:self.open_system()
+  if action:action()
+ def bloom_again(self):QTimer.singleShot(0,self.bloom_menu)
+ def toggle_fullscreen(self):
+  self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
  def open_system(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
   info=QLabel();info.setWordWrap(True);layout.addWidget(info)
@@ -306,7 +322,7 @@ class Dashboard(QWidget):
   general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
   rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
   display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
-  edit_layout=QPushButton('Edit layout (F6)');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
+  edit_layout=QPushButton('Edit layout');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
   try:profile=json.loads((self.sync_root/'dashboard-rgb.json').read_text())
   except (OSError,ValueError):profile={}
   if not isinstance(profile,dict):profile={}
@@ -373,7 +389,7 @@ class Dashboard(QWidget):
   remove_btn.clicked.connect(remove_feature)
   for b in (install_btn,launch_btn,remove_btn):features.addWidget(b)
   mobile_heading=QLabel('Sakura Mobile');mobile_heading.setStyleSheet('font-size:20px;font-weight:bold;color:#f478d7');features.addWidget(mobile_heading)
-  lyrics_button=QPushButton('Toggle live lyrics (F5)');lyrics_button.clicked.connect(self.open_lyrics);features.addWidget(lyrics_button)
+  lyrics_button=QPushButton('Toggle live lyrics');lyrics_button.clicked.connect(self.open_lyrics);features.addWidget(lyrics_button)
   mobile_pair=QPushButton('Pair phone / show pairing QR');mobile_pair.clicked.connect(self.mobile.show_pairing);features.addWidget(mobile_pair)
   features.addStretch();refresh_feature()
   tabs.setCurrentIndex(index)
@@ -512,20 +528,11 @@ class Dashboard(QWidget):
    self.lyrics_window=None;panel.close();self.update();return
   panel=LyricsWindow(self);self.lyrics_window=panel
   self.update()
- def keyPressEvent(self,e):
-  if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
-  if e.key()==Qt.Key_F6 or (self.editor.active and e.key()==Qt.Key_Escape):self.editor.toggle();return
-  if self.editor.active and e.key()==Qt.Key_R:self.editor.reset();return
-  if self.editor.active and e.key() not in (Qt.Key_F5,Qt.Key_F11):return
-  if e.key()==Qt.Key_F4 or (e.key()==Qt.Key_Escape and self.media_page):self.open_media();return
-  if e.key()==Qt.Key_Escape:self.close()
-  if e.key()==Qt.Key_F11:self.showNormal() if self.isFullScreen() else self.showFullScreen()
-  if e.key()==Qt.Key_F2:self.bloom_menu()
-  if e.key()==Qt.Key_F3:self.open_rgb_settings()
-  if e.key()==Qt.Key_F5:self.open_lyrics()
  def mousePressEvent(self,e):
   if self.editor.active:
-   if e.button()==Qt.MouseButton.LeftButton:self.editor.press(e.position())
+   if e.button()==Qt.MouseButton.LeftButton:
+    if self.settings_hit.contains(e.position()):self.bloom_menu()
+    else:self.editor.press(e.position())
    return
   if e.button()==Qt.MouseButton.LeftButton and self.notifications.hit.contains(e.position()):
    self.notifications.dismiss();self.update();return
@@ -619,7 +626,7 @@ class Dashboard(QWidget):
   if not sync:text(70,645,1100,35,'Game Sync offline',13,'#a982b5')
   text(1120,640,140,45,'MEDIA ↗',18,self.accent)
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
-  paint_settings_petal(p,1850,665,22,self.accent)
+  self.settings_hit=p.transform().mapRect(paint_settings_petal(p,1850,665,22,self.accent))
   slot=QRectF(70,515,1080,80) if lyrics else QRectF(1300,420,500,120)
   slot=p.transform().mapRect(slot)
   p.resetTransform();self.notifications.paint(p,slot,self.accent)
