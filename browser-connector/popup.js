@@ -1,0 +1,1 @@
+const api=typeof browser!=="undefined"?browser:chrome;document.getElementById("save").onclick=async()=>{await api.storage.local.set({token:document.getElementById("token").value.trim()});document.getElementById("token").value="";document.getElementById("status").textContent="Code saved. Open a Miruro video.";};
