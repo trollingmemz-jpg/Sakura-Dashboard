@@ -1,18 +1,21 @@
-const api=typeof browser!=="undefined"?browser:chrome;
-let active=null;
+const api=browser;
+const endpoint="http://127.0.0.1:8770";
+async function diagnostic(status){await api.storage.local.set({diagnostic:status,diagnosticTime:Date.now()});}
 api.runtime.onMessage.addListener((message,sender)=>{
- if(message.type!=="sakura-media"||!sender.tab)return;
- if(active!==null&&active!==sender.tab.id&&!message.data.playing)return;
- active=sender.tab.id;
+ if(message.type==="sakura-test")return (async()=>{
+  try{const {token}=await api.storage.local.get("token");const r=await fetch(endpoint+"/health",{headers:{Authorization:"Bearer "+(token||"")}});return r.ok?{status:(await r.json()).enabled?"Connected — tracking enabled":"Connected — enable tracking in Sakura"}:{status:"Pairing rejected (HTTP "+r.status+")"};}catch(e){return {status:"Cannot reach Sakura on port 8770: "+e.message};}
+ })();
+ if(!sender.tab)return;
+ if(message.type==="sakura-diagnostic"){if(sender.frameId===0)return diagnostic(message.status);return;}
+ if(message.type!=="sakura-media")return;
  return (async()=>{
   const {token}=await api.storage.local.get("token");
-  if(!token)return;
+  if(!token){await diagnostic("Pairing code missing");return;}
   try{
-   const response=await fetch("http://127.0.0.1:8770/media",{method:"POST",headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(message.data)});
-   if(response.ok){const data=await response.json();if(data.command)await api.tabs.sendMessage(sender.tab.id,{command:data.command});}
-  }catch(e){}
+   const r=await fetch(endpoint+"/media",{method:"POST",headers:{Authorization:"Bearer "+token,"Content-Type":"application/json"},body:JSON.stringify(message.data)});
+   await diagnostic(r.ok?"Playback report accepted":"Playback rejected (HTTP "+r.status+")");
+   if(r.ok){const d=await r.json();if(d.command)await api.tabs.sendMessage(sender.tab.id,{command:d.command},{frameId:sender.frameId});}
+  }catch(e){await diagnostic("Connection failed: "+e.message);}
  })();
 });
-api.tabs.onRemoved.addListener(id=>{if(active===id)active=null;});
-
-api.browserAction.onClicked.addListener(()=>api.tabs.create({url:api.runtime.getURL('popup.html')}));
+api.browserAction.onClicked.addListener(()=>api.tabs.create({url:api.runtime.getURL("popup.html")}));
