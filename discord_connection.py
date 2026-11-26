@@ -19,6 +19,10 @@ class DiscordConnection:
      # Python 3.15 lazy import compatibility: resolve the concrete executor
      # class before asyncio's DNS resolver tries to construct it lazily.
      executor_class=importlib.import_module('concurrent.futures.thread').ThreadPoolExecutor
+     futures=importlib.import_module('concurrent.futures')
+     # Repair the unresolved public alias only when it is not a real class.
+     if not isinstance(futures.ThreadPoolExecutor,type):
+      futures.ThreadPoolExecutor=executor_class
      asyncio.get_running_loop().set_default_executor(executor_class(thread_name_prefix='sakura-discord'))
      intents=discord.Intents.none();intents.guilds=True;intents.voice_states=True
      intents.guild_messages=bool(channel_id);intents.message_content=bool(channel_id)
