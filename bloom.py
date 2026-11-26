@@ -77,9 +77,19 @@ class Bloom(InlinePanel):
    if elapsed<(i+1)*.27:continue
    if self.closing is not None and time.monotonic()-self.closing>(4-i)*.045:continue
    a=-math.pi/2+i*2*math.pi/5;x=92*math.cos(a);y=92*math.sin(a)
-   p.setFont(QFont('Sans Serif',10));p.setPen(QColor('#f1ddec'));p.drawText(QRectF(x-48,y-12,96,24),Qt.AlignmentFlag.AlignCenter,label)
+   font=QFont('Sans Serif')
+   font.setPixelSize(13)
+   font.setWeight(QFont.Weight.Medium)
+   font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing,.65)
+   p.setFont(font)
+   color=QColor('#f1ddec')
+   if self.cursor is not None and math.hypot(self.cursor.x()-x,self.cursor.y()-y)<38:
+    color=QColor(self.accent).lighter(135)
+   color.setAlphaF(max(0.,min(1.,(elapsed-(i+1)*.27)/.16)))
+   p.setPen(color)
+   p.drawText(QRectF(x-49,y-13,98,26),Qt.AlignmentFlag.AlignCenter,label)
   p.setBrush(QColor('#160e20'));p.setPen(QPen(self.accent,1));p.drawEllipse(QPointF(0,0),30,30)
-  p.setFont(QFont('Sans Serif',22));p.setPen(self.accent);p.drawText(QRectF(-30,-30,60,60),Qt.AlignmentFlag.AlignCenter,'桜')
+  center_font=QFont('Sans Serif');center_font.setPixelSize(26);center_font.setWeight(QFont.Weight.Normal);p.setFont(center_font);p.setPen(self.accent);p.drawText(QRectF(-30,-30,60,60),Qt.AlignmentFlag.AlignCenter,'桜')
 
 def paint_settings_petal(p,x,y,r,accent):
  """Compact outlined blossom, with no surrounding box or circle."""
