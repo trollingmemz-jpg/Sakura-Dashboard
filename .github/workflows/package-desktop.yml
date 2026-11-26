@@ -1,0 +1,38 @@
+name: Package Sakura desktop
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dashboard
+      - uses: actions/checkout@v4
+        with:
+          repository: trollingmemz-jpg/Sakura-Game-Sync
+          ref: main
+          path: game-sync
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check Python and launcher syntax
+        run: |
+          python -m compileall -q dashboard game-sync
+          bash -n dashboard/run.sh dashboard/install-launcher.sh
+      - name: Create source update package
+        run: |
+          mkdir -p package/Sakura-Dashboard package/Sakura-Game-Sync
+          git -C dashboard archive HEAD | tar -x -C package/Sakura-Dashboard
+          git -C game-sync archive HEAD | tar -x -C package/Sakura-Game-Sync
+          printf '%s\n' 'Sakura desktop source update. Existing installations should use the Dashboard launcher automatic Git updater. This archive contains both repositories; it is not a standalone binary installer.' > package/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sakura-Desktop-Update
+          path: package/
+          if-no-files-found: error
