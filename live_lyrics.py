@@ -2,8 +2,7 @@
 import bisect, json, re, subprocess, threading, time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
+from PySide6.QtCore import QObject
 
 def parse_lrc(raw):
     result=[]
@@ -15,31 +14,13 @@ def parse_lrc(raw):
                 result.append((int(tag[1])*60+float(tag[2]),words))
     return sorted(result)
 
-class LyricsWindow(QDialog):
+class LyricsWindow(QObject):
     def __init__(self,dashboard):
         super().__init__(dashboard)
-        self.dashboard=dashboard
-        self.setWindowTitle("Sakura • Live lyrics")
-        self.resize(680,420)
-        self.setWindowFlag(Qt.WindowType.Tool,True)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.lock=threading.Lock()
         self.result=None
         self.stop=threading.Event()
         self.cache={}
-        self.labels=[]
-        layout=QVBoxLayout(self)
-        for i in range(5):
-            label=QLabel()
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            label.setWordWrap(True)
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(label,1)
-            self.labels.append(label)
-        self.labels[2].setText("Finding lyrics…")
-        self.timer=QTimer(self)
-        self.timer.timeout.connect(self.render)
-        self.timer.start(100)
         threading.Thread(target=self.worker,daemon=True).start()
 
     def worker(self):
@@ -68,24 +49,16 @@ class LyricsWindow(QDialog):
                 with self.lock:self.result=None
             self.stop.wait(.5)
 
-    def render(self):
+    def current_lines(self):
         with self.lock:result=self.result
-        accent=self.dashboard.theme_target().name()
-        self.setStyleSheet("QDialog{background:#201329} QLabel{color:#bda8c6}")
         if not result:
-            lines=["","","Waiting for local Spotify playback","",""]
-        else:
-            title,lyrics,position,sampled,playing=result
-            if not lyrics:lines=["",title,"No synced lyrics available","",""]
-            else:
-                now=position+(min(1.5,time.monotonic()-sampled) if playing else 0)
-                index=bisect.bisect_right([t for t,_ in lyrics],now)-1
-                lines=[lyrics[j][1] if 0<=j<len(lyrics) else "" for j in range(index-2,index+3)]
-        for i,label in enumerate(self.labels):
-            label.setText(lines[i])
-            label.setStyleSheet("font-size: 24px; font-weight: 600; color:"+accent if i==2 else "font-size: 16px; color:#bda8c6")
+            return ["","Waiting for local Spotify playback",""]
+        title,lyrics,position,sampled,playing=result
+        if not lyrics:return [title,"No synced lyrics available",""]
+        now=position+(min(1.5,time.monotonic()-sampled) if playing else 0)
+        index=bisect.bisect_right([t for t,_ in lyrics],now)-1
+        return [lyrics[j][1] if 0<=j<len(lyrics) else "" for j in range(index-1,index+2)]
 
-    def closeEvent(self,event):
+    def close(self):
         self.stop.set()
-        self.timer.stop()
-        super().closeEvent(event)
+        self.deleteLater()
