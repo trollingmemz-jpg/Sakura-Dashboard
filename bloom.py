@@ -11,7 +11,7 @@ class Bloom(InlinePanel):
   self.setAutoFillBackground(False)
   self.setStyleSheet('background: transparent; border: none;')
   self.setMouseTracking(True);self.accent=QColor(accent);self.labels=list(labels) if labels is not None else ['Lighting','Games','Connections','Appearance','System']
-  self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None
+  self.started=time.monotonic();self.closing=None;self.choice=-1;self.cursor=None;self.submenu=labels is not None
   self.timer=QTimer(self);self.timer.timeout.connect(self.update);self.timer.start(16)
   self.path=QPainterPath();self.path.moveTo(0,74)
   self.path.cubicTo(-28,46,-63,6,-63,-29);self.path.cubicTo(-63,-65,-25,-79,0,-63)
@@ -56,6 +56,8 @@ class Bloom(InlinePanel):
   if self.closing is not None:return
   if e.button()!=Qt.MouseButton.LeftButton:return
   p=self.coords(e)
+  if self.submenu and math.hypot(p.x(),p.y())<30:
+   self.choice=-2;self.closing=time.monotonic();self.update();e.accept();return
   self.choice=self.hit(p,time.monotonic()-self.started)
   if self.choice<0:self.dismiss()
   else:self.closing=time.monotonic();self.update()
@@ -65,7 +67,7 @@ class Bloom(InlinePanel):
   p.translate(self.width()/2,self.height()/2);s=min(self.width(),self.height())/360;p.scale(s,s)
   elapsed=time.monotonic()-self.started
   if self.closing is not None and time.monotonic()-self.closing>=.30:
-   QTimer.singleShot(0,lambda:self.done(self.choice+2 if self.choice>=0 else 0));return
+   QTimer.singleShot(0,lambda:self.done(1 if self.choice==-2 else self.choice+2 if self.choice>=0 else 0));return
   primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
   for i,label in enumerate(self.labels):
    t,x,y,rot,scale=self.geometry_at(i,elapsed)
@@ -106,7 +108,7 @@ class Bloom(InlinePanel):
    p.setPen(color)
    p.drawText(QRectF(x-49,y-22,98,44),Qt.AlignmentFlag.AlignCenter|Qt.TextFlag.TextWordWrap,label)
   p.setBrush(QColor('#160e20'));p.setPen(QPen(self.accent,1));p.drawEllipse(QPointF(0,0),30,30)
-  center_font=QFont('Sans Serif');center_font.setPixelSize(26);center_font.setWeight(QFont.Weight.Normal);p.setFont(center_font);p.setPen(self.accent);p.drawText(QRectF(-30,-30,60,60),Qt.AlignmentFlag.AlignCenter,'桜')
+  center_font=QFont('Sans Serif');center_font.setPixelSize(26);center_font.setWeight(QFont.Weight.Normal);p.setFont(center_font);p.setPen(self.accent);p.drawText(QRectF(-30,-30,60,60),Qt.AlignmentFlag.AlignCenter,'‹' if self.submenu else '桜')
 
 def paint_settings_petal(p,x,y,r,accent):
  """Compact outlined blossom, with no surrounding box or circle."""
