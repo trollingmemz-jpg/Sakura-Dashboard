@@ -14,18 +14,28 @@ ROOT=Path.home()/'.config/sakura-mobile'
 BRIDGE=Path(__file__).resolve().with_name('mobile_bridge.py')
 
 def network():
+    import re
+    def private(host):
+        try:
+            ip=ipaddress.IPv4Address(host)
+            return any(ip in ipaddress.IPv4Network(net) for net in ('10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'))
+        except (ValueError,TypeError):
+            return False
     routes=json.loads(subprocess.check_output(['ip','-j','-4','route','show','default'],text=True,timeout=2))
     for route in sorted(routes,key=lambda r:r.get('metric',0)):
         dev=route.get('dev')
-        if not dev:continue
+        if not dev or not re.fullmatch(r'[A-Za-z0-9_.:-]+',dev):continue
+        try:
+            mac=(Path('/sys/class/net')/dev/'address').read_text().strip()
+        except OSError:
+            continue
+        if not re.fullmatch(r'(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}',mac):continue
         links=json.loads(subprocess.check_output(['ip','-j','-4','addr','show','dev',dev],text=True,timeout=2))
-        for link in links:
-            mac=link.get('address','')
-            for addr in link.get('addr_info',[]):
-                host=addr.get('local','')
-                if addr.get('scope')=='global' and ipaddress.IPv4Address(host).is_private and len(mac)==17:
-                    return host,mac
-    raise RuntimeError('No private LAN address found. Connect Ethernet or Wi-Fi.')
+        hosts=[a.get('local') for link in links for a in link.get('addr_info',[]) if a.get('scope')=='global' and private(a.get('local'))]
+        preferred=route.get('prefsrc') or route.get('src')
+        if preferred in hosts:return preferred,mac
+        if hosts:return hosts[0],mac
+    raise RuntimeError('No private LAN address found on a default-route interface. Connect Ethernet or Wi-Fi.')
 
 class MobileCompanion(QObject):
     def __init__(self,owner):
