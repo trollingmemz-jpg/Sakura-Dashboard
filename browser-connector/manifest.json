@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Sakura Media Connector",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Opt-in local anime and manga history for Sakura",
   "permissions": [
     "storage",
@@ -27,12 +27,15 @@
     }
   ],
   "browser_action": {
-    "default_title": "Sakura Media Connector",
-    "default_popup": "popup.html"
+    "default_title": "Sakura Media Connector"
   },
   "browser_specific_settings": {
     "gecko": {
       "id": "sakura-media@local.sakura"
     }
+  },
+  "options_ui": {
+    "page": "popup.html",
+    "open_in_tab": true
   }
 }
