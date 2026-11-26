@@ -25,6 +25,8 @@ from windows_stats import GPUStats
 from windows_media import LocalMedia
 from windows_update import Updater
 from game_autohide import AutoHide
+from PySide6.QtWidgets import QSystemTrayIcon,QMenu
+from PySide6.QtGui import QIcon,QPixmap
 class Dashboard(QWidget):
  def __init__(self):
   super().__init__(); self.setWindowTitle('Sakura Dashboard'); self.resize(1280,480); self.setWindowFlags(Qt.Window); self.bars=[0]*80; self.stats=(0,0,'—','—'); self.track=('Nothing playing',''); self.petals=[(random.random()*1920,random.random()*720,random.uniform(.2,1.2)) for _ in range(45)]
@@ -45,6 +47,7 @@ class Dashboard(QWidget):
   self.timer.start(16)
   self.load_display()
   self.game_autohide=AutoHide(self)
+  self.tray=None;self.tray_hidden=False;self.tray_lyrics=False
   self.settings_hit=QRectF();self.editor=LayoutEditor(self);self.notifications=Notifications(self);self.notifications.enabled=False
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   self.update_check_timer=QTimer(self);self.update_check_timer.timeout.connect(self.updater.check);self.update_check_timer.start(1800000)
@@ -144,7 +147,9 @@ class Dashboard(QWidget):
    if self.editor.active:
     options=[('Finish',self.editor.toggle),('Reset layout',self.editor.reset),('Cancel',lambda:None)]
    else:
-    choice=Bloom(self,self.accent).exec()-2
+    choice=Bloom(self,self.accent,['Lighting','Games','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
+    if choice==5:
+     self.hide_to_tray();return
     groups=[
      [('Lighting settings',lambda:self.open_settings(1))],
      [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
@@ -159,6 +164,36 @@ class Dashboard(QWidget):
    elif 0<=selection<len(options):action=options[selection][1]
   finally:self.panel_active=False
   if action:action()
+ def hide_to_tray(self):
+  if not QSystemTrayIcon.isSystemTrayAvailable():
+   QMessageBox.information(self,'Sakura','System tray is unavailable. Sakura will stay visible.');return
+  if self.tray is None:
+   pix=QPixmap(64,64);pix.fill(Qt.GlobalColor.transparent)
+   p=QPainter(pix);p.setRenderHint(QPainter.RenderHint.Antialiasing);paint_settings_petal(p,32,32,27,QColor('#f478d7'));p.end()
+   self.tray=QSystemTrayIcon(QIcon(pix),self);self.tray.setToolTip('Sakura Dashboard')
+   self.tray_menu=QMenu(self)
+   self.tray_menu.addAction('Restore Sakura',self.restore_from_tray)
+   self.tray_menu.addAction('Exit Sakura',self.exit_from_tray)
+   self.tray.setContextMenu(self.tray_menu)
+   self.tray.activated.connect(self.tray_activated)
+  self.tray.show()
+  self.tray_hidden=True
+  lyrics=getattr(self,'lyrics_window',None)
+  self.tray_lyrics=bool(lyrics and lyrics.isVisible())
+  if self.tray_lyrics:lyrics.hide()
+  self.hide()
+ def tray_activated(self,reason):
+  if reason in (QSystemTrayIcon.ActivationReason.Trigger,QSystemTrayIcon.ActivationReason.DoubleClick):self.restore_from_tray()
+ def restore_from_tray(self):
+  if not self.tray_hidden:return
+  self.tray_hidden=False
+  self.show();self.raise_();self.activateWindow()
+  lyrics=getattr(self,'lyrics_window',None)
+  if self.tray_lyrics and lyrics:lyrics.show()
+  self.tray_lyrics=False
+  if self.tray:self.tray.hide()
+ def exit_from_tray(self):
+  if self.close():QApplication.instance().quit()
  def bloom_again(self):QTimer.singleShot(0,self.bloom_menu)
  def toggle_fullscreen(self):
   self.showNormal() if self.isFullScreen() else self.showFullScreen()
@@ -378,6 +413,7 @@ class Dashboard(QWidget):
   self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
 
  def closeEvent(self, event):
+  if self.tray:self.tray.hide()
   self.poll_stop.set();self.notifications.close()
   if getattr(self,'lyrics_window',None):self.lyrics_window.close()
   self.discord.disconnect();self.connect.closed=True;self.win_audio.closed=True;self.media.closed=True
