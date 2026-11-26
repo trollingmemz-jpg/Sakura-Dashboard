@@ -30,8 +30,8 @@ class MediaBridge:
      self.reply(200,{'command':command})
     except (ValueError,TypeError,OverflowError):self.reply(400,{})
   try:
-   self.server=ThreadingHTTPServer(('127.0.0.1',8765),Handler);threading.Thread(target=self.server.serve_forever,daemon=True).start()
-  except OSError:self.status='Port 8765 unavailable'
+   self.server=ThreadingHTTPServer(('127.0.0.1',8770),Handler);threading.Thread(target=self.server.serve_forever,daemon=True).start()
+  except OSError:self.status='Port 8770 unavailable'
  def current(self):
   with self.lock:return dict(self.data) if self.enabled and time.monotonic()-self.data.get('time',0)<8 else {}
  def privacy(self,enabled):
