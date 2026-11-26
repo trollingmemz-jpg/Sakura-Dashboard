@@ -149,7 +149,7 @@ class Dashboard(QWidget):
    else:
     choice=Bloom(self,self.accent,['Lighting','Games','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
     if choice==5:
-     self.hide_to_tray();return
+     QTimer.singleShot(0,self.hide_to_tray);return
     groups=[
      [('Lighting settings',lambda:self.open_settings(1))],
      [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
@@ -176,8 +176,10 @@ class Dashboard(QWidget):
    self.tray_menu.addAction('Exit Sakura',self.exit_from_tray)
    self.tray.setContextMenu(self.tray_menu)
    self.tray.activated.connect(self.tray_activated)
-  self.tray.show()
   self.tray_hidden=True
+  self.game_autohide.hidden=False;self.game_autohide.misses=0
+  QApplication.instance().setQuitOnLastWindowClosed(False)
+  self.tray.show()
   lyrics=getattr(self,'lyrics_window',None)
   self.tray_lyrics=bool(lyrics and lyrics.isVisible())
   if self.tray_lyrics:lyrics.hide()
@@ -187,7 +189,10 @@ class Dashboard(QWidget):
  def restore_from_tray(self):
   if not self.tray_hidden:return
   self.tray_hidden=False
+  self.tray_restore_until=time.monotonic()+5
+  self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating,False)
   self.show();self.raise_();self.activateWindow()
+  QApplication.instance().setQuitOnLastWindowClosed(True)
   lyrics=getattr(self,'lyrics_window',None)
   if self.tray_lyrics and lyrics:lyrics.show()
   self.tray_lyrics=False
@@ -413,6 +418,7 @@ class Dashboard(QWidget):
   self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
 
  def closeEvent(self, event):
+  QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
   self.poll_stop.set();self.notifications.close()
   if getattr(self,'lyrics_window',None):self.lyrics_window.close()
