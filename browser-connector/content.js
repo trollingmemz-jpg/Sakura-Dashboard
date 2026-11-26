@@ -1,7 +1,9 @@
 const api=browser;
 function report(){
  if(document.hidden)return;
- const url=location.origin+location.pathname;
+ const diag=status=>api.runtime.sendMessage({type:'sakura-diagnostic',status}).catch(()=>{});
+ let page=location;try{page=window.top.location;}catch(e){}
+ const url=page.origin+page.pathname;
  const meta=navigator.mediaSession?.metadata;
  let title=meta?.title||document.querySelector('meta[property="og:title"]')?.content||document.title;
  if(location.hostname==="mangadex.org"){
@@ -15,9 +17,10 @@ function report(){
   return;
  }
  const v=[...document.querySelectorAll("video")].sort((a,b)=>b.videoWidth*b.videoHeight-a.videoWidth*a.videoHeight)[0];
- if(!v||v.currentTime<3)return;
- const part=(document.title.match(/(?:episode|ep\.?)[\s:-]*\d+(?:\.\d+)?/i)||[])[0]|| (new URLSearchParams(location.search).get("episode") ? "Episode "+new URLSearchParams(location.search).get("episode") : "");
- if(!part)return;
+ if(!v){diag('Miruro detected — no accessible video element; embedded frames: '+document.querySelectorAll('iframe').length);return;}
+ if(v.currentTime<3){diag('Video detected — waiting for playback');return;}
+ const part=((document.title+' '+(document.querySelector('h1')?.textContent||'')+' '+(document.querySelector('h2')?.textContent||'')).match(/(?:episode|ep\.?)[\s:-]*\d+(?:\.\d+)?/i)||[])[0]|| (new URLSearchParams(page.search).get("episode") ? "Episode "+new URLSearchParams(location.search).get("episode") : "");
+ if(!part){diag('Video detected — episode metadata missing');return;}
  title=title.replace(part,"").replace(/\s*[-|]\s*Miruro.*$/i,"").trim();
  api.runtime.sendMessage({type:"sakura-media",data:{url,title,episode:part,playing:!v.paused&&!v.ended,position:Number.isFinite(v.currentTime)?v.currentTime:0,duration:Number.isFinite(v.duration)?v.duration:0}}).catch(()=>{});
 }
