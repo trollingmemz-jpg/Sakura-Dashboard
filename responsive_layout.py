@@ -2,6 +2,7 @@
 from PySide6.QtCore import Qt,QRectF,QPointF
 from PySide6.QtGui import QPainter,QColor,QFont,QLinearGradient,QPen
 import time
+from live_lyrics import paint_lyrics
 def paint_responsive(o):
  p=QPainter(o);p.setRenderHint(QPainter.Antialiasing)
  w,h=o.width(),o.height();portrait=w<h;pad=max(12,min(w,h)*.045)
@@ -35,7 +36,15 @@ def paint_responsive(o):
  text(tx,ty,tw,22,'NOW PLAYING',13,accent);text(tx,ty+24,tw,32,title,min(28,tw*.085));text(tx,ty+56,tw,22,artist,min(17,tw*.06),'#c393cc')
  bw=min(70,(tw-12)/3)
  for i,(label,action) in enumerate([('‹','previous'),('Ⅱ' if o.playing() else '▶','toggle'),('›','next')]):button(tx+i*(bw+6),ty+82,bw,30,label,action)
- stats(sx,sy,sw,sh)
+ lyrics=getattr(o,'lyrics_window',None)
+ if lyrics:
+  if portrait:
+   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,sh),accent)
+  else:
+   lyric_h=space*.52
+   paint_lyrics(p,lyrics,QRectF(sx,sy,sw,lyric_h),accent)
+   stats(sx,sy+lyric_h+pad*.4,sw,max(45,min(space*.23,bottom-sy-lyric_h-pad*.4-30)))
+ else:stats(sx,sy,sw,sh)
  if vh>8:
   for i,b in enumerate(o.bars):
    bh=max(2,min(1,b)*vh);p.setPen(Qt.NoPen);p.setBrush(accent);p.drawRoundedRect(QRectF(vx+i*vw/80,vy+vh-bh,max(1,vw/80*.65),bh),2,2)
