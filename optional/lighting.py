@@ -1,5 +1,5 @@
 """Sakura Lighting: standalone user-space RGB controller."""
-import sys, os, json, math, time, colorsys, stat, shutil, threading, fcntl
+import sys, os, json, math, time, colorsys, stat, shutil, threading, fcntl, socket
 from pathlib import Path
 HOME=Path.home()
 ROOT=HOME/'.local/share/sakura-lighting'
@@ -25,8 +25,8 @@ def released(): return read(SYNC,{}).get('mode')=='off'
 def save(path,data):
     path.parent.mkdir(parents=True,exist_ok=True)
     tmp=path.with_suffix('.tmp'); tmp.write_text(json.dumps(data,indent=2)); tmp.replace(path)
-def chroma_data(now=None):
-    data=read(CHROMA,{})
+def chroma_data(now=None,data=None):
+    if data is None:data=read(CHROMA,{})
     try:
         if not data.get('enabled') or abs((time.time() if now is None else now)-float(data['heartbeat']))>3:return None
         color=data['color']
@@ -38,13 +38,22 @@ def chroma_data(now=None):
         bars=data.get('bars',[])
         if not isinstance(bars,list) or len(bars)!=80:return None
         bars=[max(0.,min(1.,float(x))) for x in bars]
-        return rgb,bars
+        palette=[]
+        for c in data.get('palette',[])[:4]:
+            if isinstance(c,str) and len(c)==7 and c.startswith('#'):palette.append(tuple(int(c[i:i+2],16) for i in (1,3,5)))
+        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,heartbeat=float(data['heartbeat']))
     except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
-def reactive_frame(base,bars,key,count,brightness):
+def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.):
     def level(lo,hi):
         values=bars[lo:hi]
         return sum(values)/len(values) if values else 0.
-    def rgb(v):return tuple(round(c*brightness/100*(.08+.92*max(0.,min(1.,v)))) for c in base)
+    def rgb(v,color=base):return tuple(round(c*brightness/100*(.08+.92*max(0.,min(1.,v)))) for c in color)
+    if effect=='Ambient flow':
+        energy=level(0,65);return [rgb(.2+.55*energy+.25*(1+math.sin(now*2-i*math.tau/max(1,count)))/2) for i in range(count)]
+    if effect=='Bass shockwave':
+        return [rgb(max(level(0,12)*.35,max(0.,1-abs(i/max(1,count-1)-beat_age*2.5)*5)*max(0.,1-beat_age))) for i in range(count)]
+    if effect=='Album palette' and palette:
+        return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count)),palette[min(len(palette)-1,i*len(palette)//count)]) for i in range(count)]
     if key=='mouse':return [rgb(level(0,12))]
     if key in ('ram1','ram2'):
         energy=level(0,20) if key=='ram1' else level(20,65)
@@ -78,6 +87,13 @@ def main():
     except BlockingIOError:
         if headless:print('Sakura Lighting is already running; visualiser will retry.',file=sys.stderr)
         return
+    receiver=None;socket_path=CONFIG/'chroma.sock'
+    if headless:
+        try:
+            socket_path.unlink(missing_ok=True);receiver=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);receiver.bind(str(socket_path));socket_path.chmod(0o600);receiver.setblocking(False)
+        except OSError:
+            if receiver:receiver.close()
+            receiver=None
     win=QWidget(); win.setWindowTitle('Sakura Lighting'); win.resize(720,540)
     win.setStyleSheet('QWidget{background:#19141f;color:#f4e5f1;font-size:14px} QPushButton,QComboBox{background:#38283f;border:1px solid #59415c;border-radius:8px;padding:10px} QPushButton:hover{background:#56334e} QPushButton:disabled{color:#817683} QSlider::groove:horizontal{height:6px;background:#514052;border-radius:3px} QSlider::handle:horizontal{background:#f478d7;width:16px;margin:-5px 0;border-radius:8px}')
     layout=QVBoxLayout(win);layout.setContentsMargins(28,24,28,24);layout.setSpacing(14)
@@ -159,9 +175,9 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5
         while not halt.wait(max(0.,deadline-time.monotonic())):
-            now=time.monotonic();deadline=now+(1/30 if headless else .12)
+            now=time.monotonic();deadline=now+(1/rate if headless else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
@@ -183,8 +199,23 @@ def main():
                     if ks:devices['keyboard']=ks[0]
                     for i,d in enumerate(rs[:2]):devices['ram'+str(i+1)]=d
                 except Exception as e:disconnect();errors.append(str(e))
-            chroma=chroma_data()
+            if receiver:
+                for _ in range(16):
+                    try:packet=json.loads(receiver.recv(16384))
+                    except (BlockingIOError,OSError):break
+                    except ValueError:continue
+            chroma=chroma_data(data=packet) if packet is not None else None
+            if chroma is None:chroma=chroma_data()
+            effect_name='Spectrum';palette=[];bars=[];latency=0.
+            if chroma:
+                bars=chroma[1];meta=chroma[2];rate=meta['rate'];effect_name=meta['effect'];palette=meta['palette'];latency=max(0.,(time.time()-meta['heartbeat'])*1000)
+                bass=sum(bars[:12])/12;energy=max(bars);gain_peak=max(.25,energy,gain_peak*.998)
+                if bass>max(.16,bass_avg+.075) and now-beat_at>.18:beat_at=now
+                bass_avg+=.04*(bass-bass_avg)
+                if meta['adaptive']:bars=[min(1.,v/max(.45,gain_peak)) for v in bars]
+                if effect_name=='Automatic':effect_name='Bass shockwave' if bass_avg>.42 else 'Ambient flow' if energy<.38 else 'Spectrum'
             for k in rows:
+                if headless and k.startswith('ram') and now-last_write.get(k,-100)<1/30:continue
                 if not p.get(k,{}).get('enabled'):continue
                 h=p[k]['color'];manual=tuple(int(h[i:i+2],16) for i in (1,3,5));target_color=chroma[0] if chroma is not None else manual
                 previous=blended.get(k,manual);base=tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
@@ -193,7 +224,7 @@ def main():
                 if chroma is not None:
                     count=1 if k=='mouse' else len(devices[k].leds) if k in devices else 0
                     if not count:continue
-                    values=reactive_frame(base,chroma[1],k,count,power) if p['mode']!='Blackout' else [(0,0,0)]*count
+                    values=reactive_frame(base,bars,k,count,power,effect_name,palette,now-beat_at,now) if p['mode']!='Blackout' else [(0,0,0)]*count
                 else:
                     rgb=frame(base,effect,power,now);values=[rgb]*(1 if k=='mouse' else len(devices[k].leds) if k in devices else 0)
                 if not values:continue
@@ -205,16 +236,18 @@ def main():
                         from openrgb.utils import RGBColor
                         d=devices[k];d.set_colors([RGBColor(*rgb) for rgb in values],fast=True)
                     else:continue
-                    last[k]=signature
+                    last[k]=signature;last_write[k]=now
                 except Exception as e:
                     errors.append(k+': '+str(e))
                     if k!='mouse':disconnect();retry=now+5
-            state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
+            state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | {latency:.0f} ms packet age | {effect_name} | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
         halt.set();state['active']=False;mobile_status.unlink(missing_ok=True)
-        if headless:(CONFIG/'visualiser-status.json').unlink(missing_ok=True)
+        if headless:
+            (CONFIG/'visualiser-status.json').unlink(missing_ok=True)
+            if receiver:receiver.close();socket_path.unlink(missing_ok=True)
         else:save(CONFIG/'profile.json',snapshot())
     app.aboutToQuit.connect(close)
     if headless:snapshot();state['active']=released();app.setQuitOnLastWindowClosed(False)
