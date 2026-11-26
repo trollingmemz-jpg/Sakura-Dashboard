@@ -47,34 +47,37 @@ class Dashboard(QWidget):
   self.mobile=MobileCompanion(self)
 
  def room_worker(self):
-  last={};last_at=0.;previous=None
-  while not self.room_stop.wait(.3):
-   pending=self.room_pending
-   if pending is None:last.clear();previous=None;continue
-   color,devices=pending
-   if previous is None:previous=color
-   previous=tuple(a+(b-a)*.35 for a,b in zip(previous,color))
-   rgb=tuple(round(v) for v in previous)
-   if time.monotonic()-last_at<.5:continue
-   last_at=time.monotonic();errors=[]
-   for device in devices:
-    if self.room_pending is None or self.room_stop.is_set():break
-    if device in last and max(abs(a-b) for a,b in zip(rgb,last[device]))<5:continue
+  def request(payload):
+   with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+    client.settimeout(15);client.connect(str(Path.home()/'.local/run/lightctl/lightctl.sock'))
+    client.sendall(json.dumps(payload).encode());reply=json.loads(client.recv(65536).decode())
+   if not reply.get('ok'):raise RuntimeError(str(reply.get('error','Lightctl rejected command')))
+  active=False
+  try:
+   while not self.room_stop.wait(.04):
+    pending=self.room_pending
     try:
-     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-      client.settimeout(2);client.connect(str(Path.home()/'.local/run/lightctl/lightctl.sock'))
-      client.sendall(json.dumps(dict(action='set_rgb',device=device,r=rgb[0],g=rgb[1],b=rgb[2])).encode());reply=json.loads(client.recv(65536).decode())
-     if not reply.get('ok'):raise RuntimeError(str(reply.get('error','Lightctl rejected command')))
-     last[device]=rgb
-    except (OSError,ValueError,RuntimeError,AttributeError) as e:errors.append(device+': '+str(e))
-   self.room_status='Lightctl: '+'; '.join(errors) if errors else 'Room sync active — '+', '.join(devices)
+     if pending is None:
+      if active:request(dict(action='sakura_stop'));active=False
+      continue
+     rgb,devices,level=pending
+     request(dict(action='sakura_frame',colour=rgb,devices=devices,level=level))
+     active=True;self.room_status='Room sync active — '+', '.join(devices)
+    except (OSError,ValueError,RuntimeError,AttributeError) as e:
+     self.room_status='Lightctl: '+str(e)
+     self.room_stop.wait(1)
+  finally:
+   if active:
+    try:request(dict(action='sakura_stop'))
+    except (OSError,ValueError,RuntimeError):pass
  def publish_chroma(self):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
-  room_enabled=bool(self.display_options.get('room_sync',False) and self.display_options.get('album_theme',False) and self.art_url)
+  room_enabled=bool(self.display_options.get('room_sync',False))
   room_devices=tuple(dict.fromkeys(n.strip() for n in str(self.display_options.get('room_device','bulb,cupboard')).split(',') if n.strip()))
-  self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices) if room_enabled and room_devices else None
-  if not room_enabled:self.room_status='Room sync disabled / waiting for album artwork'
+  room_level=min(1.,max(self.bars[:24],default=0.)*1.35) if enabled else 1.
+  self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices,room_level) if room_enabled and room_devices else None
+  if not room_enabled:self.room_status='Room sync disabled'
   try:
    payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30))
    if self.chroma_was_enabled!=enabled or (enabled and time.monotonic()-self.chroma_heartbeat>=.5):
@@ -325,7 +328,7 @@ class Dashboard(QWidget):
   hardware_visualiser=QCheckBox('Enable media-reactive hardware lighting');hardware_visualiser.setChecked(bool(view.get('hardware_visualiser',False)));features.addWidget(hardware_visualiser)
   chroma_effect=QComboBox();chroma_effect.addItems(['Spectrum','Bass shockwave','Ambient flow','Album palette','Automatic']);chroma_effect.setCurrentText(view.get('chroma_effect','Spectrum'));features.addWidget(QLabel('Media lighting effect'));features.addWidget(chroma_effect)
   chroma_rate=QComboBox();chroma_rate.addItems(['30 FPS — compatibility','60 FPS — low latency']);chroma_rate.setCurrentIndex(1 if view.get('chroma_rate',30)==60 else 0);features.addWidget(chroma_rate)
-  room_sync=QCheckBox('Sync room lights with album artwork');room_sync.setChecked(bool(view.get('room_sync',False)));features.addWidget(room_sync)
+  room_sync=QCheckBox('Sync room lights with Chroma (album colours and audio)');room_sync.setChecked(bool(view.get('room_sync',False)));features.addWidget(room_sync)
   room_device=QLineEdit(str(view.get('room_device','bulb,cupboard')));features.addWidget(QLabel('Lightctl device names (comma-separated)'));features.addWidget(room_device)
   room_status=QLabel(self.room_status);room_status.setWordWrap(True);features.addWidget(room_status)
   room_timer=QTimer(dlg);room_timer.timeout.connect(lambda:room_status.setText(self.room_status));room_timer.start(500)
