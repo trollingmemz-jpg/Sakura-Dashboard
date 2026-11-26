@@ -61,6 +61,11 @@ def discord_panel(owner):
   owner.discord.connect(token.text().strip(),int(user.text()),int(guild.text()),int(channel.text() or '0'));token.clear()
  button=QPushButton('Connect bot');button.clicked.connect(connect);layout.addRow(button)
  button=QPushButton('Disconnect');button.clicked.connect(owner.discord.disconnect);layout.addRow(button)
+ diagnostic=QPushButton('Copy Discord diagnostics');layout.addRow(diagnostic)
+ def copy_diagnostic():
+  from PySide6.QtWidgets import QApplication
+  s=owner.discord.state;QApplication.clipboard().setText(s.get('diagnostic') or s.get('status','No error'))
+ diagnostic.clicked.connect(copy_diagnostic)
  def update():
   s=owner.discord.state;status.setText(s.get('status',''));voice.setText(('Voice: '+s['channel']+'\n'+'\n'.join(n+(' • muted' if m else '')+(' • deafened' if d else '') for n,m,d in s.get('voice',[]))) if s.get('channel') else 'Not in a visible server voice channel');messages.setText('\n'.join(n+': '+m for n,m in s.get('messages',[])[-8:]))
  timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);update();dlg.exec();timer.stop()
