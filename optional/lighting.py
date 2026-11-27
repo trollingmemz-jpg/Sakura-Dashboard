@@ -41,7 +41,7 @@ def chroma_data(now=None,data=None):
         palette=[]
         for c in data.get('palette',[])[:4]:
             if isinstance(c,str) and len(c)==7 and c.startswith('#'):palette.append(tuple(int(c[i:i+2],16) for i in (1,3,5)))
-        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,heartbeat=float(data['heartbeat']))
+        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),heartbeat=float(data['heartbeat']))
     except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
 def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.):
     def level(lo,hi):
@@ -59,6 +59,22 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
         energy=level(0,20) if key=='ram1' else level(20,65)
         return [rgb(max(0.,min(1.,energy*count-i))) for i in range(count)]
     return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count))) for i in range(count)]
+def visor_frame(old,new,progress,brightness):
+    """Sweep a narrow illuminated leading edge across the LED order."""
+    if progress>=1 or len(old)!=len(new):return new
+    t=max(0.,progress);u=(1-math.cos(math.pi*t))/2
+    if len(new)==1:
+        return [tuple(round(a+(b-a)*u) for a,b in zip(old[0],new[0]))]
+    front=-.18+1.36*u
+    result=[]
+    for i,(a,b) in enumerate(zip(old,new)):
+        x=i/(len(new)-1)
+        mix=max(0.,min(1.,(front-x)/.10+.5))
+        edge=max(0.,1-abs(x-front)/.12)*math.sin(math.pi*t)*.48
+        base=[v+(w-v)*mix for v,w in zip(a,b)]
+        ceiling=max(max(a),max(b),min(255,brightness*2.55))
+        result.append(tuple(max(0,min(255,round(v+(ceiling-v)*edge))) for v in base))
+    return result
 def frame(rgb,mode,brightness,t,index=0):
     if mode=='Rainbow': rgb=tuple(round(x*255) for x in colorsys.hsv_to_rgb((t/8+index*.12)%1,1,1))
     scale=brightness/100
@@ -116,6 +132,7 @@ def main():
     dim=QCheckBox('Dim existing lighting when PC locks');dim.setChecked(cfg.get('dim_on_lock',True));layout.addWidget(dim)
     dimlevel=QSlider(Qt.Orientation.Horizontal);dimlevel.setRange(0,100);dimlevel.setValue(cfg.get('locked_brightness',15))
     dimlabel=QLabel('Locked brightness multiplier: '+str(dimlevel.value())+'%');dimlevel.valueChanged.connect(lambda v:dimlabel.setText('Locked brightness multiplier: '+str(v)+'%'));layout.addWidget(dimlabel);layout.addWidget(dimlevel)
+    visor=QCheckBox('Visor sweep on colour changes');visor.setChecked(cfg.get('visor',True));layout.addWidget(visor)
     status=QLabel('Idle — no hardware writes');status.setWordWrap(True);layout.addWidget(status)
     buttons=QHBoxLayout();start=QPushButton('Start lighting');stop=QPushButton('Release control');stop.setEnabled(False);buttons.addWidget(start);buttons.addWidget(stop);layout.addLayout(buttons)
     state={'active':False,'profile':{},'status':'Idle — no hardware writes'};halt=threading.Event()
@@ -130,7 +147,7 @@ def main():
     mobile_status=CONFIG/'mobile-status.json'
     offsets={k:cfg.get(k,{}).get('brightness',100) for k in rows}
     def snapshot():
-        p={k:{'enabled':a.isChecked(),'color':b.text(),'brightness':offsets[k]} for k,(a,b) in rows.items()};p.update(mode=mode.currentText(),brightness=brightness.value(),dim_on_lock=dim.isChecked(),locked_brightness=dimlevel.value());state['profile']=p
+        p={k:{'enabled':a.isChecked(),'color':b.text(),'brightness':offsets[k]} for k,(a,b) in rows.items()};p.update(mode=mode.currentText(),brightness=brightness.value(),dim_on_lock=dim.isChecked(),locked_brightness=dimlevel.value(),visor=visor.isChecked());state['profile']=p
         return p
     def begin():
         if not released(): QMessageBox.warning(win,'Release Game Sync','Set Dashboard lighting mode to Off and save first.');return
@@ -175,13 +192,13 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}
         while not halt.wait(max(0.,deadline-time.monotonic())):
-            now=time.monotonic();deadline=now+(1/rate if headless else .12)
+            now=time.monotonic();deadline=now+(1/rate if headless else 1/30 if transitions else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
-                blended.clear()
+                blended.clear();transitions.clear();targets.clear()
                 continue
             p=state['profile'];errors=[]
             if previous_frame:fps=.85*fps+.15/max(.001,now-previous_frame) if fps else 1/max(.001,now-previous_frame)
@@ -218,7 +235,12 @@ def main():
                 if headless and k.startswith('ram') and now-last_write.get(k,-100)<1/30:continue
                 if not p.get(k,{}).get('enabled'):continue
                 h=p[k]['color'];manual=tuple(int(h[i:i+2],16) for i in (1,3,5));target_color=chroma[0] if chroma is not None else manual
-                previous=blended.get(k,manual);base=tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
+                use_visor=(meta.get('visor',True) if chroma is not None else p.get('visor',True)) and p['mode'] not in ('Blackout','Rainbow')
+                old_target=targets.get(k);targets[k]=target_color
+                if use_visor and old_target is not None and old_target!=target_color and k in last:
+                    transitions[k]=(now,last[k])
+                elif not use_visor:transitions.pop(k,None)
+                previous=blended.get(k,manual);base=target_color if use_visor else tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
                 effect='Static' if chroma is not None and p['mode']=='Rainbow' else p['mode']
                 power=p['brightness']*multiplier*p[k].get('brightness',100)/100
                 if chroma is not None:
@@ -228,6 +250,10 @@ def main():
                 else:
                     rgb=frame(base,effect,power,now);values=[rgb]*(1 if k=='mouse' else len(devices[k].leds) if k in devices else 0)
                 if not values:continue
+                if k in transitions:
+                    started,old_values=transitions[k];progress=(now-started)/.6
+                    if progress>=1 or len(old_values)!=len(values):transitions.pop(k,None)
+                    else:values=visor_frame(old_values,values,progress,power)
                 signature=tuple(values)
                 if last.get(k)==signature:continue
                 try:
@@ -239,7 +265,7 @@ def main():
                     last[k]=signature;last_write[k]=now
                 except Exception as e:
                     errors.append(k+': '+str(e))
-                    if k!='mouse':disconnect();retry=now+5
+                    if k!='mouse':disconnect();transitions.clear();targets.clear();retry=now+5
             state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | {latency:.0f} ms packet age | {effect_name} | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
         disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
