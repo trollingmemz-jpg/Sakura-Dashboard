@@ -42,8 +42,26 @@ class Bloom(InlinePanel):
   rot=(i-1+u)*360/n if i else 0
   scale=1 if i else .2+.8*u
   return t,x,y,rot,scale
+ def transformed_path(self,i,elapsed):
+  t,x,y,rot,scale=self.geometry_at(i,elapsed)
+  if t<=0:return QPainterPath()
+  tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
+  return tr.map(self.path)
+ def wrap_clip(self,elapsed):
+  # Close the circular stacking order: petal zero covers the final petal,
+  # while remaining underneath petal one. No petal has two neighbours above it.
+  n=len(self.labels)
+  if n<4:return QPainterPath()
+  last=self.transformed_path(n-1,elapsed)
+  if last.isEmpty():return QPainterPath()
+  clip=self.transformed_path(0,elapsed).intersected(last)
+  for i in range(1,n-1):
+   clip=clip.subtracted(self.transformed_path(i,elapsed))
+  return clip
  def hit(self,p,elapsed):
   if p is None or math.hypot(p.x(),p.y())<30:return -1
+  # The circular wrap is painted last, so it also owns clicks in that overlap.
+  if self.wrap_clip(elapsed).contains(p):return 0
   # Use the same animated geometry as the painter, with a small forgiving margin.
   for j in range(len(self.labels)-1,-1,-1):
    t,x,y,rot,scale=self.geometry_at(j,elapsed)
@@ -69,17 +87,25 @@ class Bloom(InlinePanel):
   if self.closing is not None and time.monotonic()-self.closing>=max(.30,(len(self.labels)-1)*.045+.12):
    QTimer.singleShot(0,lambda:self.done(1 if self.choice==-2 else self.choice+2 if self.choice>=0 else 0));return
   primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
-  for i,label in enumerate(self.labels):
+  wrap=self.wrap_clip(elapsed)
+  passes=[(i,False) for i in range(len(self.labels))]
+  if not wrap.isEmpty():passes.append((0,True))
+  for i,wrapped in passes:
    t,x,y,rot,scale=self.geometry_at(i,elapsed)
    if t<=0:continue
-   p.save();p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
+   p.save()
+   if wrapped:
+    # Clip in flower coordinates before transforming the original petal.
+    # Draw its real outline, not an artificial edge along the clipping boundary.
+    p.setClipPath(wrap,Qt.ClipOperation.IntersectClip)
+   p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
    g=QLinearGradient(0,74,0,-74);g.setColorAt(0,QColor('#1d1126'));g.setColorAt(1,QColor('#3a223b'))
    p.setBrush(g);p.setPen(QPen(self.accent.darker(210),.8));p.drawPath(self.path)
    if self.cursor is not None:
     dx=self.cursor.x();dy=self.cursor.y();r=math.hypot(dx,dy)
     theta=math.radians(rot);lx=(dx-x)*math.cos(theta)+(dy-y)*math.sin(theta);ly=-(dx-x)*math.sin(theta)+(dy-y)*math.cos(theta)
     if primary>=0:
-     p.save();p.setClipPath(self.path);p.setPen(Qt.PenStyle.NoPen)
+     p.save();p.setClipPath(self.path,Qt.ClipOperation.IntersectClip);p.setPen(Qt.PenStyle.NoPen)
      if i==primary:
       progress=max(0,min(1,(74-ly)/148))
       light=QLinearGradient(0,74,lx,ly if abs(ly-74)>1 else 73)
