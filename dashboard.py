@@ -54,6 +54,7 @@ class Dashboard(QWidget):
   self.notifications=Notifications(self)
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
+  self.visor_direction=1;self.visor_command_at=0.
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   self.metadata_stop=threading.Event();self.local_art_url=''
@@ -95,7 +96,7 @@ class Dashboard(QWidget):
   self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices,room_level) if room_enabled and room_devices else None
   if not room_enabled:self.room_status='Room sync disabled'
   try:
-   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30),visor=self.display_options.get('chroma_visor',True))
+   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30),visor=self.display_options.get('chroma_visor',True),visor_direction=self.visor_direction,visor_command_at=self.visor_command_at)
    if self.chroma_was_enabled!=enabled or (enabled and time.monotonic()-self.chroma_heartbeat>=.5):
     self.write_setting('dashboard-chroma.json',payload);self.chroma_heartbeat=time.monotonic()
    if enabled:
@@ -290,6 +291,8 @@ class Dashboard(QWidget):
   if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
   return bool(self.player.get('is_playing'))
  def command(self,action,**data):
+  if action in ('previous','next'):
+   self.visor_direction=-1 if action=='previous' else 1;self.visor_command_at=time.time()
   if action in ('play','pause','previous','next') and self.spotify_target and self.local_playing is not None:
    subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    if action in ('play','pause'):self.local_playing=action=='play'

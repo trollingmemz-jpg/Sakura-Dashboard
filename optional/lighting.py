@@ -41,7 +41,7 @@ def chroma_data(now=None,data=None):
         palette=[]
         for c in data.get('palette',[])[:4]:
             if isinstance(c,str) and len(c)==7 and c.startswith('#'):palette.append(tuple(int(c[i:i+2],16) for i in (1,3,5)))
-        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),heartbeat=float(data['heartbeat']))
+        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),direction=-1 if data.get('visor_direction')==-1 else 1,command_at=float(data.get('visor_command_at',0)),heartbeat=float(data['heartbeat']))
     except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
 def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.):
     def level(lo,hi):
@@ -59,7 +59,7 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
         energy=level(0,20) if key=='ram1' else level(20,65)
         return [rgb(max(0.,min(1.,energy*count-i))) for i in range(count)]
     return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count))) for i in range(count)]
-def visor_frame(old,new,progress,brightness):
+def visor_frame(old,new,progress,brightness,direction=1):
     """Sweep a narrow illuminated leading edge across the LED order."""
     if progress>=1 or len(old)!=len(new):return new
     t=max(0.,progress);u=(1-math.cos(math.pi*t))/2
@@ -69,6 +69,7 @@ def visor_frame(old,new,progress,brightness):
     result=[]
     for i,(a,b) in enumerate(zip(old,new)):
         x=i/(len(new)-1)
+        if direction<0:x=1-x
         mix=max(0.,min(1.,(front-x)/.10+.5))
         edge=max(0.,1-abs(x-front)/.12)*math.sin(math.pi*t)*.48
         base=[v+(w-v)*mix for v,w in zip(a,b)]
@@ -192,13 +193,13 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}; consumed_commands={}
         while not halt.wait(max(0.,deadline-time.monotonic())):
             now=time.monotonic();deadline=now+(1/rate if headless else 1/30 if transitions else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
-                blended.clear();transitions.clear();targets.clear()
+                blended.clear();transitions.clear();targets.clear();consumed_commands.clear()
                 continue
             p=state['profile'];errors=[]
             if previous_frame:fps=.85*fps+.15/max(.001,now-previous_frame) if fps else 1/max(.001,now-previous_frame)
@@ -238,7 +239,10 @@ def main():
                 use_visor=(meta.get('visor',True) if chroma is not None else p.get('visor',True)) and p['mode'] not in ('Blackout','Rainbow')
                 old_target=targets.get(k);targets[k]=target_color
                 if use_visor and old_target is not None and old_target!=target_color and k in last:
-                    transitions[k]=(now,last[k])
+                    direction=1
+                    if chroma is not None and 0<=time.time()-meta['command_at']<10 and consumed_commands.get(k)!=meta['command_at']:
+                        direction=meta['direction'];consumed_commands[k]=meta['command_at']
+                    transitions[k]=(now,last[k],direction)
                 elif not use_visor:transitions.pop(k,None)
                 previous=blended.get(k,manual);base=target_color if use_visor else tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
                 effect='Static' if chroma is not None and p['mode']=='Rainbow' else p['mode']
@@ -251,9 +255,9 @@ def main():
                     rgb=frame(base,effect,power,now);values=[rgb]*(1 if k=='mouse' else len(devices[k].leds) if k in devices else 0)
                 if not values:continue
                 if k in transitions:
-                    started,old_values=transitions[k];progress=(now-started)/.6
+                    started,old_values,direction=transitions[k];progress=(now-started)/.6
                     if progress>=1 or len(old_values)!=len(values):transitions.pop(k,None)
-                    else:values=visor_frame(old_values,values,progress,power)
+                    else:values=visor_frame(old_values,values,progress,power,direction)
                 signature=tuple(values)
                 if last.get(k)==signature:continue
                 try:
