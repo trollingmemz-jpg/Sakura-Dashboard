@@ -9,6 +9,7 @@ import urllib.request
 from bloom import Bloom, paint_settings_petal
 from spotify_connect import Connect
 from inline_panel import InlinePanel
+from source_volume import add_volume
 from mobile_panel import MobileCompanion
 from discord_connection import DiscordConnection
 from feature_panels import read_profiles,profiles_panel,discord_panel
@@ -298,7 +299,7 @@ class Dashboard(QWidget):
   devices=QComboBox();layout.addRow('Playback device',devices)
   transfer=QPushButton('Transfer playback');transfer.setEnabled(False);layout.addRow(transfer)
   refresh=QPushButton('Refresh devices');layout.addRow(refresh)
-  volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(int((self.player.get('device') or {}).get('volume_percent') or 0));layout.addRow('Volume',volume)
+  add_volume(self,layout)
   playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist)
   play=QPushButton('Play playlist');layout.addRow(play)
   shuffle=QCheckBox('Shuffle');shuffle.setChecked(bool(self.player.get('shuffle_state',False)));layout.addRow(shuffle)
@@ -326,7 +327,6 @@ class Dashboard(QWidget):
     pending[0]=0.;status.setText('Spotify did not respond. Check your network and account connection.')
   transfer.clicked.connect(lambda:send('transfer',device=devices.currentData()) if devices.currentData() else None)
   refresh.clicked.connect(lambda:send('refresh'))
-  volume.sliderReleased.connect(lambda:send('volume',value=volume.value()))
   play.clicked.connect(lambda:send('playlist',value=playlist.text()))
   shuffle.toggled.connect(lambda value:send('shuffle',value=value))
   repeat.activated.connect(lambda _:send('repeat',value=repeat.currentText()))
