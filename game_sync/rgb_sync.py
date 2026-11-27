@@ -2,6 +2,13 @@ import os, math, time, threading, stat
 from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
+def connect_sdk(factory):
+ # OpenRGB uses 6742 by default; older Sakura installations use 6743.
+ for port in (6742,6743):
+  try:return factory('127.0.0.1',port),port
+  except Exception:continue
+ return None,None
+
 class RGBSync(QObject):
  report=Signal(str)
  def __init__(self,parent=None):
@@ -12,16 +19,16 @@ class RGBSync(QObject):
  def update(self,enabled,locked,keyboard,ram,mouse,scanning=True,profile=None):
   self.state=(enabled,locked,keyboard,ram,mouse,scanning,profile or {})
  def run(self):
-  client=None;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(244.,120.,215.)
+  client=None;port=None;detected=0;devices=[];previous=None;mix=0.;retry=0.;mouse_retry=0.;mouse_path=None;last_mouse=None;last_sdk=None;last_status='';base=(244.,120.,215.)
   def report(msg):
    nonlocal last_status
    if msg!=last_status:self.report.emit(msg);last_status=msg
   def disconnect():
-   nonlocal client,devices,last_sdk
+   nonlocal client,port,detected,devices,last_sdk
    if client:
     try:client.disconnect()
     except Exception:pass
-   client=None;devices=[];last_sdk=None
+   client=None;port=None;detected=0;devices=[];last_sdk=None
   while not self.stop.wait(.10):
    enabled,locked,keyboard,ram,mouse,scanning,profile=self.state
    now=time.monotonic()
@@ -45,19 +52,21 @@ class RGBSync(QObject):
     retry=now+8
     try:
      from openrgb import OpenRGBClient
-     client=OpenRGBClient('127.0.0.1',6743)
+     client,port=connect_sdk(OpenRGBClient)
+     if client is None:raise ConnectionError('No SDK connection on ports 6742 or 6743')
+     detected=len(client.devices)
      for d in client.devices:
       if (keyboard and int(d.type)==5) or (ram and int(d.type)==1) or (mouse and int(d.type)==6):
        devices.append(d) # OpenLinkHub exposes only Direct mode; already selected
     except Exception as e:
-     disconnect();errors.append('SDK: '+str(e))
+     disconnect();errors.append('SDK connection failed: '+type(e).__name__)
    if client and rgb!=last_sdk:
     try:
      from openrgb.utils import RGBColor
      for d in devices:d.set_colors([RGBColor(*rgb) for _ in d.leds],fast=True)
      last_sdk=rgb
     except Exception as e:
-     disconnect();retry=now+8;errors.append('SDK: '+str(e))
+     disconnect();retry=now+8;errors.append('SDK connection failed: '+type(e).__name__)
    if False: # Linux ckb FIFO not available on Windows
     try:
      if mouse_path is None or not mouse_path.exists():
@@ -72,6 +81,7 @@ class RGBSync(QObject):
      last_mouse=rgb
     except Exception as e:mouse_retry=now+3;errors.append('Mouse: '+str(e))
    if errors:report(' | '.join(errors))
-   elif (keyboard or ram) and client is None:report('Waiting for OpenRGB SDK')
-   else:report(f'OpenRGB: {len(devices)} selected devices')
+   elif (keyboard or ram or mouse) and client is None:report('Waiting for OpenRGB SDK (6742 or 6743)')
+   elif client:report(f'OpenRGB: {len(devices)} selected devices; {detected} detected; port {port}')
+   else:report('No RGB device categories selected')
   disconnect()
