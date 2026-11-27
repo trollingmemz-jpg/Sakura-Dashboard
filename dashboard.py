@@ -24,6 +24,7 @@ from windows_audio import WindowsAudio
 from windows_stats import GPUStats
 from windows_media import LocalMedia
 from windows_update import Updater
+from windows_mobile import MobileCompanion
 from game_autohide import AutoHide
 from PySide6.QtWidgets import QSystemTrayIcon,QMenu
 from PySide6.QtGui import QIcon,QPixmap
@@ -33,6 +34,7 @@ class Dashboard(QWidget):
   self.sync_root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';self.sync_root.mkdir(parents=True,exist_ok=True); self.sync_status={}; self.sync_started=False; self.sync_error=''; self.sync_timer=QTimer(self); self.sync_timer.timeout.connect(self.refresh_sync); self.sync_timer.start(1000); self.refresh_sync(); self.ensure_sync()
   self.discord=DiscordConnection();self.game_profile={};self.hit_regions={}
   self.connect=Connect(self.sync_root);self.media=LocalMedia();self.updater=Updater(self.sync_root);self.media_key=None
+  self.mobile=MobileCompanion(self)
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
   self.spectrum = LiveSpectrum();self.win_audio=WindowsAudio();self.audio_generation=-1;self.gpu_stats=GPUStats()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
@@ -307,12 +309,13 @@ class Dashboard(QWidget):
    for app,title,body,stamp in self.notifications.history:
     label=QLabel(time.strftime('%H:%M',time.localtime(stamp))+'  ·  '+app+'\n'+title+'\n'+body);label.setTextFormat(Qt.TextFormat.PlainText);label.setWordWrap(True);items.addWidget(label)
    panel.exec();timer.stop()
-  for label,fn in [('Notifications',history),('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Help & Diagnostics',lambda:dlg.done(5)),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  for label,fn in [('Pair phone / show pairing QR',lambda:dlg.done(6)),('Notifications',history),('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Help & Diagnostics',lambda:dlg.done(5)),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();result=dlg.exec();timer.stop()
   if result==3:self.open_updates()
   elif result==4:self.welcome()
   elif result==5:self.open_diagnostics()
+  elif result==6:self.mobile.show_pairing()
  def open_account(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Spotify account');layout=QFormLayout(dlg)
   client=QLineEdit(str(self.connect.read('settings.json').get('client','')));layout.addRow('Spotify client ID',client)
