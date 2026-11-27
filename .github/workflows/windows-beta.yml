@@ -16,6 +16,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Retrieve shared Sakura chimes from main
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git checkout FETCH_HEAD -- sounds
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import wave; from pathlib import Path; files=[Path('sounds')/(n+'.wav') for n in ('welcome','open','close')]; missing=[str(p) for p in files if not p.is_file()]; print('Missing optional chimes:', missing) if missing else print('All three chimes present'); [(lambda w: (w.getnframes(), w.close()))(wave.open(str(p),'rb')) for p in files if p.is_file()]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: python -m pip install -r requirements-windows.txt
       - run: python -m compileall -q dashboard.py bloom.py inline_panel.py spotify_connect.py token_lock.py windows_audio.py windows_stats.py windows_entry.py windows_media.py windows_update.py feature_panels.py discord_connection.py responsive_layout.py layout_editor.py desktop_notifications.py windows_notifications.py live_lyrics.py game_sync
       - name: Stamp build version
