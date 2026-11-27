@@ -11,6 +11,7 @@ from spotify_connect import Connect
 from inline_panel import InlinePanel
 from sakura_sounds import SakuraSounds
 from source_volume import add_volume
+from media_direction import MediaDirection
 from mobile_panel import MobileCompanion
 from discord_connection import DiscordConnection
 from feature_panels import read_profiles,profiles_panel,discord_panel
@@ -55,6 +56,7 @@ class Dashboard(QWidget):
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.visor_direction=1;self.visor_command_at=0.
+  self.media_direction=MediaDirection(self.note_visor_direction)
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   self.metadata_stop=threading.Event();self.local_art_url=''
@@ -296,9 +298,11 @@ class Dashboard(QWidget):
  def playing(self):
   if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
   return bool(self.player.get('is_playing'))
+ def note_visor_direction(self,direction):
+  self.visor_direction=direction;self.visor_command_at=time.time()
  def command(self,action,**data):
   if action in ('previous','next'):
-   self.visor_direction=-1 if action=='previous' else 1;self.visor_command_at=time.time()
+   self.note_visor_direction(-1 if action=='previous' else 1)
   if action in ('play','pause','previous','next') and self.spotify_target and self.local_playing is not None:
    subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    if action in ('play','pause'):self.local_playing=action=='play'
@@ -579,6 +583,7 @@ class Dashboard(QWidget):
  def closeEvent(self, event):
   if getattr(self,'_closing_sakura',False):event.ignore();return
   self._closing_sakura=True
+  self.media_direction.close()
   self.hide();self.sounds.shutdown()
   QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
