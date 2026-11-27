@@ -10,6 +10,8 @@ def main():
   from winrt.windows.storage.streams import DataReader
   from winrt.windows.ui.notifications.management import UserNotificationListener
   import windows_mobile,qrcode,cryptography
+  from pycaw.pycaw import AudioUtilities
+  import source_volume
   from PySide6.QtWidgets import QApplication,QWidget
   from windows_theme import apply_theme
   from inline_panel import InlinePanel,PanelSurface
