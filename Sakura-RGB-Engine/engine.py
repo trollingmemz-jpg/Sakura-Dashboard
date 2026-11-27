@@ -28,6 +28,10 @@ class Engine:
         self.notes = []
     def scan(self):
         self.devices, self.notes = [], []
+        if platform.system() == 'Linux':
+            self.scan_linux_hid()
+            self.scan_leds()
+            return self.devices
         try:
             import hid
             for item in hid.enumerate():
@@ -38,9 +42,22 @@ class Engine:
             self.notes.append('HID discovery unavailable: '+type(e).__name__)
         if platform.system() == 'Windows':
             self.scan_memory()
-        if platform.system() == 'Linux':
-            self.scan_leds()
         return self.devices
+    def scan_linux_hid(self, root='/sys/bus/hid/devices'):
+        for entry in sorted(Path(root).glob('*')):
+            try:
+                fields=dict(line.split('=',1) for line in (entry/'uevent').read_text().splitlines() if '=' in line)
+                bus, vendor, product=fields['HID_ID'].split(':')
+                v,p=int(vendor,16),int(product,16)
+                name=TARGETS.get((v,p)) or fields.get('HID_NAME') or 'HID device'
+                interface=-1
+                for parent in entry.resolve().parents:
+                    if (parent/'bInterfaceNumber').is_file():
+                        interface=int((parent/'bInterfaceNumber').read_text().strip(),16)
+                        break
+                self.devices.append(Device(name,'USB HID' if int(bus,16)==3 else 'HID',f'{v:04X}:{p:04X}','Protocol unverified — read-only',interface=interface))
+            except (OSError,ValueError,KeyError):
+                continue
     def scan_memory(self):
         command = 'Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer,PartNumber | ConvertTo-Json -Compress'
         try:
@@ -79,4 +96,4 @@ class Engine:
         rows=[]
         for d in self.devices:
             row=asdict(d); row.pop('path'); rows.append(row)
-        return json.dumps({'engine':'Sakura RGB Engine 0.1','os':platform.system(),'devices':rows,'notes':self.notes},indent=2)
+        return json.dumps({'engine':'Sakura RGB Engine 0.2','os':platform.system(),'devices':rows,'notes':self.notes},indent=2)
