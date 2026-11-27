@@ -22,7 +22,7 @@ jobs:
         shell: pwsh
         run: Set-Content -Path build-id.txt -Value '${{ github.run_id }}' -Encoding ascii
       - name: Package application
-        run: python -m PyInstaller --noconfirm --windowed --onedir --name Sakura --add-data "game_sync;game_sync" --add-data "build-id.txt;." --collect-all winrt --hidden-import winrt.windows.foundation --hidden-import winrt.windows.foundation.collections --collect-submodules discord --hidden-import windows_games --hidden-import adaptive --hidden-import rgb_sync --hidden-import cv2 --hidden-import PIL.ImageGrab --hidden-import soundcard --collect-all soundcard --collect-submodules openrgb --paths game_sync windows_entry.py
+        run: python -m PyInstaller --noconfirm --windowed --onedir --name Sakura --add-data "game_sync;game_sync" --add-data "build-id.txt;." --add-data "sounds;sounds" --collect-all winrt --hidden-import winrt.windows.foundation --hidden-import winrt.windows.foundation.collections --collect-submodules discord --hidden-import windows_games --hidden-import adaptive --hidden-import rgb_sync --hidden-import cv2 --hidden-import PIL.ImageGrab --hidden-import soundcard --collect-all soundcard --collect-submodules openrgb --paths game_sync windows_entry.py
       - name: Smoke test
         shell: pwsh
         run: |
