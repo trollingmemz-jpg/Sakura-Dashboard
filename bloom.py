@@ -47,28 +47,22 @@ class Bloom(InlinePanel):
   if t<=0:return QPainterPath()
   tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
   return tr.map(self.path)
- def wrap_clip(self,elapsed):
-  # Close the circular stacking order: petal zero covers the final petal,
-  # while remaining underneath petal one. No petal has two neighbours above it.
-  n=len(self.labels)
-  if n<4:return QPainterPath()
-  last=self.transformed_path(n-1,elapsed)
-  if last.isEmpty():return QPainterPath()
-  clip=self.transformed_path(0,elapsed).intersected(last)
-  for i in range(1,n-1):
-   clip=clip.subtracted(self.transformed_path(i,elapsed))
-  return clip
+ def visible_paths(self,elapsed):
+  # Every petal owns its counterclockwise overlap and yields to the next.
+  # Use a single geometry rule for all six seams, including the wraparound.
+  paths=[self.transformed_path(i,elapsed) for i in range(len(self.labels))]
+  n=len(paths)
+  if n<4:return paths
+  return [path.subtracted(paths[(i+1)%n]) for i,path in enumerate(paths)]
  def hit(self,p,elapsed):
   if p is None or math.hypot(p.x(),p.y())<30:return -1
-  # The circular wrap is painted last, so it also owns clicks in that overlap.
-  if self.wrap_clip(elapsed).contains(p):return 0
-  # Use the same animated geometry as the painter, with a small forgiving margin.
-  for j in range(len(self.labels)-1,-1,-1):
-   t,x,y,rot,scale=self.geometry_at(j,elapsed)
-   if t<=0:continue
-   tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
-   inv,valid=tr.inverted()
-   if valid and self.hit_path.contains(inv.map(p)):return j
+  visible=self.visible_paths(elapsed)
+  for j in range(len(visible)-1,-1,-1):
+   if visible[j].contains(p):return j
+  # Forgiving margin is used only outside the actual visible petals.
+  stroke=QPainterPathStroker();stroke.setWidth(12)
+  for j in range(len(visible)-1,-1,-1):
+   if not visible[j].isEmpty() and stroke.createStroke(visible[j]).contains(p):return j
   return -1
  def mousePressEvent(self,e):
   if self.closing is not None:return
@@ -87,17 +81,19 @@ class Bloom(InlinePanel):
   if self.closing is not None and time.monotonic()-self.closing>=max(.30,(len(self.labels)-1)*.045+.12):
    QTimer.singleShot(0,lambda:self.done(1 if self.choice==-2 else self.choice+2 if self.choice>=0 else 0));return
   primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
-  wrap=self.wrap_clip(elapsed)
-  passes=[(i,False) for i in range(len(self.labels))]
-  if not wrap.isEmpty():passes.append((0,True))
-  for i,wrapped in passes:
+  paths=[self.transformed_path(i,elapsed) for i in range(len(self.labels))]
+  n=len(paths)
+  for i,label in enumerate(self.labels):
    t,x,y,rot,scale=self.geometry_at(i,elapsed)
    if t<=0:continue
    p.save()
-   if wrapped:
-    # Clip in flower coordinates before transforming the original petal.
-    # Draw its real outline, not an artificial edge along the clipping boundary.
-    p.setClipPath(wrap,Qt.ClipOperation.IntersectClip)
+   if n>=4 and not paths[(i+1)%n].isEmpty():
+    # Mask the underlying petal BEFORE painting its fill, border or hover.
+    # Preserve the covering petal's outline as well. No second paint pass.
+    cover=paths[(i+1)%n]
+    border=QPainterPathStroker();border.setWidth(.8)
+    mask=QPainterPath();mask.addRect(QRectF(-360,-360,720,720))
+    p.setClipPath(mask.subtracted(cover.united(border.createStroke(cover))),Qt.ClipOperation.IntersectClip)
    p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
    g=QLinearGradient(0,74,0,-74);g.setColorAt(0,QColor('#1d1126'));g.setColorAt(1,QColor('#3a223b'))
    p.setBrush(g);p.setPen(QPen(self.accent.darker(210),.8));p.drawPath(self.path)
