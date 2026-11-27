@@ -11,11 +11,12 @@ def main():
         print(engine.report())
         return
     from PySide6.QtCore import QTimer, Qt
-    from PySide6.QtGui import QColor
+    from PySide6.QtGui import QColor, QIcon, QPixmap
     from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-        QAbstractItemView, QColorDialog, QFileDialog, QMessageBox)
+        QAbstractItemView, QColorDialog, QFileDialog, QMessageBox, QComboBox)
 
+    assets=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent))/'assets'
     class Window(QWidget):
         def __init__(self):
             super().__init__()
@@ -38,7 +39,17 @@ def main():
             layout.setContentsMargins(22,18,22,18)
             title=QLabel('桜  /  SAKURA RGB ENGINE')
             title.setStyleSheet('font-size: 24px; font-weight: bold; color: #f478d7;')
-            layout.addWidget(title)
+            brand=QHBoxLayout()
+            self.logo=QLabel()
+            self.logo.setFixedSize(76,76)
+            brand.addWidget(self.logo)
+            brand.addWidget(title,1)
+            self.style_choice=QComboBox()
+            self.style_choice.addItems(['Original logo','Alternate logo','Transparent logo'])
+            self.style_choice.currentIndexChanged.connect(self.update_brand)
+            brand.addWidget(self.style_choice)
+            layout.addLayout(brand)
+            self.update_brand(0)
             subtitle=QLabel('Native hardware discovery and lighting')
             layout.addWidget(subtitle)
             self.table=QTableWidget(0,4)
@@ -73,6 +84,15 @@ def main():
             self.timer.start(100)
             self.refresh()
 
+        def update_brand(self,index):
+            filename=('sakura.png','sakura-alt.png','sakura-transparent.png')[index]
+            pix=QPixmap(str(assets/filename))
+            if not pix.isNull():
+                self.logo.setPixmap(pix.scaled(76,76,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
+                self.setWindowIcon(QIcon(pix))
+            else:
+                self.logo.clear()
+                self.setWindowIcon(QIcon())
         def refresh(self):
             if self.busy:return
             self.busy=True
@@ -131,6 +151,8 @@ def main():
                 except OSError as e:QMessageBox.warning(self,'Report',str(e))
 
     app=QApplication(sys.argv)
+    if (assets/'sakura.png').is_file():
+        app.setWindowIcon(QIcon(str(assets/'sakura.png')))
     window=Window()
     window.show()
     sys.exit(app.exec())
