@@ -203,6 +203,56 @@ class Dashboard(QWidget):
  def toggle_fullscreen(self):
   self.showNormal() if self.isFullScreen() else self.showFullScreen()
 
+
+ def open_diagnostics(self):
+  from PySide6.QtWidgets import QPlainTextEdit
+  import platform, socket, re
+  dlg=QDialog(self);dlg.setWindowTitle('Help & Diagnostics');dlg.resize(680,520);layout=QVBoxLayout(dlg)
+  hint=QLabel('Generate a support report, review it, then copy or save it to send to support. No account tokens, song titles, usernames, serial numbers or raw logs are included. Nothing is uploaded automatically.');hint.setWordWrap(True);layout.addWidget(hint)
+  report=QPlainTextEdit();report.setReadOnly(True);layout.addWidget(report)
+  generate=QPushButton('Generate support report');layout.addWidget(generate)
+  copy=QPushButton('Copy report');copy.setEnabled(False);layout.addWidget(copy)
+  save=QPushButton('Save report');save.setEnabled(False);layout.addWidget(save)
+  def collect():
+   lines=['Sakura Windows support report','Build: '+str(self.updater.build),'Windows version: '+platform.version(),'Architecture: '+platform.machine(),'Game Sync: '+('Running' if self.sync_status else 'Offline'),'Local media detected: '+('Yes' if self.media.state else 'No'),'Local playback active: '+('Yes' if self.media.state.get('playing') else 'No'),'Audio visualiser enabled: '+str(bool(self.display_options.get('visualiser',False)))]
+   app=str(self.media.state.get('app','')).lower()
+   lines.append('Media source: '+('Spotify' if 'spotify' in app else 'Other media app' if app else 'None'))
+   for port in (6742,6743):
+    try:
+     with socket.create_connection(('127.0.0.1',port),timeout=.3):lines.append(f'OpenRGB port {port}: reachable (TCP only)')
+    except OSError:lines.append(f'OpenRGB port {port}: unavailable')
+   rgb=str(self.sync_status.get('rgb',''))
+   match=re.fullmatch(r'OpenRGB: (\d+) selected devices',rgb)
+   lines.append('RGB selected devices: '+(match.group(1) if match else 'Unknown'))
+   for name in ('crash.log','media.log','update.log'):
+    lines.append(name+': '+('Present' if (self.sync_root/name).is_file() else 'Not found'))
+   return '\n'.join(lines)
+  result=[]
+  def worker():
+   try:
+    base=collect()
+    # Read only device hardware IDs; never include instance paths or serials.
+    command="Get-PnpDevice -PresentOnly -Class Keyboard,Mouse,HIDClass | ForEach-Object { if ($_.InstanceId -match 'VID_[0-9A-F]{4}&PID_[0-9A-F]{4}') { $Matches[0] } } | Sort-Object -Unique"
+    try:
+     p=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',command],capture_output=True,text=True,timeout=12,creationflags=subprocess.CREATE_NO_WINDOW)
+     ids=sorted(set(re.findall(r'VID_[0-9A-F]{4}&PID_[0-9A-F]{4}',p.stdout.upper())))
+     base+='\nUSB HID hardware IDs: '+(', '.join(ids) if ids else 'None reported' if p.returncode==0 else 'Unavailable')
+    except (OSError,subprocess.TimeoutExpired):base+='\nUSB HID hardware IDs: unavailable'
+    result.append(base)
+   except Exception:result.append('Support report could not be generated. Please retry.')
+  def start():
+   result.clear();generate.setEnabled(False);copy.setEnabled(False);save.setEnabled(False);report.setPlainText('Collecting diagnostics…');threading.Thread(target=worker,daemon=True).start()
+  def check():
+   if result and not generate.isEnabled():
+    report.setPlainText(result[0]);generate.setEnabled(True);copy.setEnabled(True);save.setEnabled(True)
+  def export():
+   path,_=QFileDialog.getSaveFileName(dlg,'Save support report','Sakura-support.txt','Text files (*.txt)')
+   if path:
+    try:Path(path).write_text(report.toPlainText(),encoding='utf-8')
+    except OSError:QMessageBox.warning(dlg,'Support report','Unable to save report.')
+  generate.clicked.connect(start);copy.clicked.connect(lambda:QApplication.clipboard().setText(report.toPlainText()));save.clicked.connect(export)
+  timer=QTimer(dlg);timer.timeout.connect(check);timer.start(150);start();dlg.exec();timer.stop()
+
  def open_system(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
   info=QLabel();info.setWordWrap(True);layout.addWidget(info)
@@ -235,11 +285,12 @@ class Dashboard(QWidget):
    for app,title,body,stamp in self.notifications.history:
     label=QLabel(time.strftime('%H:%M',time.localtime(stamp))+'  ·  '+app+'\n'+title+'\n'+body);label.setTextFormat(Qt.TextFormat.PlainText);label.setWordWrap(True);items.addWidget(label)
    panel.exec();timer.stop()
-  for label,fn in [('Notifications',history),('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Copy diagnostics',lambda:QApplication.clipboard().setText(info.text()+'\n'+log.text())),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
+  for label,fn in [('Notifications',history),('Restart Game Sync',restart),('Relaunch Sakura',relaunch),('Updates',lambda:dlg.done(3)),('Getting started',lambda:dlg.done(4)),('View update log',logs),('Help & Diagnostics',lambda:dlg.done(5)),('Exit Sakura',lambda:(dlg.accept(),self.close()))]:
    button=QPushButton(label);button.clicked.connect(fn);layout.addWidget(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(1000);update();result=dlg.exec();timer.stop()
   if result==3:self.open_updates()
   elif result==4:self.welcome()
+  elif result==5:self.open_diagnostics()
  def open_account(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Spotify account');layout=QFormLayout(dlg)
   client=QLineEdit(str(self.connect.read('settings.json').get('client','')));layout.addRow('Spotify client ID',client)
