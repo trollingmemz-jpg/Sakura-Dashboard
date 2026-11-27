@@ -84,6 +84,19 @@ class Dashboard(QWidget):
  def open_profiles(self):profiles_panel(self);self.refresh_profile()
  def open_discord(self):discord_panel(self)
  def responsive(self):return self.width()/max(1,self.height())<2.2
+ def wide_blossom_geometry(self):
+  # Work in widget coordinates, not the stretched 1920x720 canvas.
+  sx=self.width()/1920;sy=self.height()/720
+  r=max(12.,min(28.,22*min(sx,sy)))
+  x=min(self.width()-r-6,max(r+6,1850*sx))
+  y=min(self.height()-r-6,max(r+6,665*sy))
+  return x,y,r
+ def blossom_hit_rect(self):
+  if self.responsive():
+   w,h=self.width(),self.height();pad=max(12,min(w,h)*.045)
+   x,y,r=w-pad-18,h-pad-18,18
+  else:x,y,r=self.wide_blossom_geometry()
+  return QRectF(x-r-5,y-r-5,2*r+10,2*r+10)
  def refresh_sync(self):
   try:
    state=json.loads((self.sync_root/'dashboard-status.json').read_text())
@@ -535,17 +548,19 @@ class Dashboard(QWidget):
  def mousePressEvent(self,e):
   if self.editor.active:
    if e.button()==Qt.MouseButton.LeftButton:
-    if self.settings_hit.contains(e.position()):self.bloom_menu()
+    if self.blossom_hit_rect().contains(e.position()):self.bloom_menu()
     else:self.editor.press(e.position())
    return
   if e.button()==Qt.MouseButton.LeftButton and self.notifications.hit.contains(e.position()):
    self.notifications.dismiss();self.update();return
   if any(isinstance(c,InlinePanel) and c.isVisible() for c in self.children()):return
+  if e.button()==Qt.MouseButton.LeftButton and self.blossom_hit_rect().contains(e.position()):
+   self.bloom_menu();return
   if self.responsive():
    for action,rect in self.hit_regions.items():
+    if action=='settings':continue
     if rect.contains(e.position()):
-     if action=='settings':self.bloom_menu()
-     elif action=='connections':self.open_player()
+     if action=='connections':self.open_player()
      elif action=='discord':self.open_discord()
      elif action=='toggle':self.command('pause' if self.playing() else 'play')
      else:self.command(action)
@@ -553,7 +568,6 @@ class Dashboard(QWidget):
    return
   x=e.position().x()*1920/max(1,self.width());y=e.position().y()*720/max(1,self.height())
   if e.button()==Qt.MouseButton.RightButton:self.circle_points=[(x,y)]
-  elif math.hypot(x-1850,y-665)<32:self.bloom_menu()
   else:
    for action,rect in self.hit_regions.items():
     if rect.contains(e.position()):
@@ -628,7 +642,10 @@ class Dashboard(QWidget):
   if self.updater.asset:text(70,645,1100,35,'Update available — open System',13,self.accent)
   elif not sync:text(70,645,1100,35,'Game Sync offline',13,'#a982b5')
   text(1300,640,470,45,time.strftime('%A  •  %d %B'),16,'#a982b5')
-  self.settings_hit=p.transform().mapRect(paint_settings_petal(p,1850,665,22,self.accent))
+  p.save();p.resetTransform()
+  bx,by,br=self.wide_blossom_geometry()
+  self.settings_hit=paint_settings_petal(p,bx,by,br,self.accent)
+  p.restore()
   slot=QRectF(70,515,1080,80) if lyrics else QRectF(1300,420,500,120)
   slot=p.transform().mapRect(slot)
   p.resetTransform();self.notifications.paint(p,slot,self.accent,self.editor)
