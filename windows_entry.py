@@ -5,6 +5,7 @@ def main():
  root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';root.mkdir(parents=True,exist_ok=True)
  if '--smoke-test' in sys.argv:
   import PySide6,psutil,numpy,soundcard,cv2,PIL,openrgb
+  import winrt.windows.foundation,winrt.windows.foundation.collections
   from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
   from winrt.windows.storage.streams import DataReader
   from winrt.windows.ui.notifications.management import UserNotificationListener
