@@ -7,5 +7,8 @@ $python = '.\.venv\Scripts\python.exe'
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 & $python -m unittest discover -v
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-& $python -m PyInstaller --noconfirm --clean --onefile --windowed --name Sakura-RGB-Engine --collect-all hid app.py
+$branding = @()
+if (Test-Path 'assets\sakura.ico') { $branding += @('--icon','assets\sakura.ico') }
+if (Test-Path 'assets') { $branding += @('--add-data','assets;assets') }
+& $python -m PyInstaller @branding --noconfirm --clean --onefile --windowed --name Sakura-RGB-Engine --collect-all hid app.py
 exit $LASTEXITCODE
