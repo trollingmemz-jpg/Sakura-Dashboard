@@ -1,6 +1,7 @@
 """Local Windows media sessions: no Spotify API account required."""
 import asyncio
 import datetime
+import ctypes
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -41,6 +42,16 @@ class LocalMedia:
             self.log.warning('Media command queue full')
 
     def run(self):
+        # WinRT async work lives on a dedicated multithreaded COM apartment.
+        hr = ctypes.windll.combase.RoInitialize(1)
+        if hr not in (0, 1):
+            self.log.warning('RoInitialize returned %s', hr)
+        try:
+            self.run_worker()
+        finally:
+            if hr in (0, 1):ctypes.windll.combase.RoUninitialize()
+
+    def run_worker(self):
         while not self.closed:
             try:
                 asyncio.run(self.loop())
@@ -61,6 +72,7 @@ class LocalMedia:
         return await asyncio.wait_for(operation, timeout=seconds)
 
     async def choose(self, manager):
+        from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
         sessions = list(manager.get_sessions() or [])
         self.session_count = len(sessions)
         self.spotify_sessions = 0
@@ -80,8 +92,12 @@ class LocalMedia:
         for index, session in enumerate(sessions):
             try:
                 app = session.source_app_user_model_id or ''
-                info = session.get_playback_info()
-                playing = info is not None and int(info.playback_status) == 4
+                try:
+                    info = session.get_playback_info()
+                    playing = info is not None and info.playback_status == PlaybackStatus.PLAYING
+                except Exception:
+                    playing = False
+                    self.log.debug('Playback status unavailable', exc_info=True)
                 ranked.append(((playing, 'spotify' in app.lower(), -index), session, app, playing))
             except Exception:
                 self.log.debug('Session inspection failed', exc_info=True)
@@ -92,12 +108,13 @@ class LocalMedia:
                 if props and props.title:
                     return session, props, app, playing
             except Exception:
-                self.log.debug('Session metadata unavailable', exc_info=True)
+                self.log.warning('Session metadata unavailable', exc_info=True)
         return None
 
     async def loop(self):
         from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as Manager
         from winrt.windows.storage.streams import DataReader
+        import winrt.windows.foundation, winrt.windows.foundation.collections
         manager = await self.bounded(Manager.request_async(), 10)
         self.error_type = ''
         self.log.info('Windows media manager connected')

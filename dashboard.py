@@ -248,7 +248,7 @@ class Dashboard(QWidget):
    lines.append('RGB selected devices: '+(match.group(1) if match else 'Unknown'))
    lines.append('RGB detected devices: '+(match.group(2) if match else 'Unknown'))
    lines.append('OpenRGB SDK connected port: '+(match.group(3) if match else 'Not connected or lighting disabled'))
-   for name in ('crash.log','media.log','update.log'):
+   for name in ('crash.log','media.log','audio.log','update.log'):
     lines.append(name+': '+('Present' if (self.sync_root/name).is_file() else 'Not found'))
    return '\n'.join(lines)
   result=[]
@@ -344,6 +344,13 @@ class Dashboard(QWidget):
  def open_player(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
   hint=QLabel('Local playback works without an account. Remote Spotify devices and automatic playlists require Premium.');hint.setWordWrap(True);layout.addRow(hint)
+  local_status=QLabel(self.media.status);local_status.setWordWrap(True);layout.addRow('Local Windows media',local_status)
+  visual=QCheckBox('Enable system audio visualiser');visual.setChecked(bool(self.display_options.get('visualiser',False)));layout.addRow(visual)
+  audio_status=QLabel(self.win_audio.status);audio_status.setWordWrap(True);layout.addRow('Audio capture',audio_status)
+  def toggle_visual(value):
+   try:self.write_setting('dashboard-display.json',dict(self.display_options,visualiser=value));self.load_display()
+   except OSError as e:audio_status.setText(str(e))
+  visual.toggled.connect(toggle_visual)
   status=QLabel('Discovering Spotify Connect devices…');status.setWordWrap(True);layout.addRow(status)
   devices=QComboBox();layout.addRow('Playback device',devices)
   transfer=QPushButton('Transfer playback');transfer.setEnabled(False);layout.addRow(transfer)
@@ -359,6 +366,7 @@ class Dashboard(QWidget):
   def send(action,**data):
    pending[0]=time.time();status.setText('Requesting '+action+'…');self.command(action,**data)
   def update():
+   local_status.setText(self.media.status);audio_status.setText(self.win_audio.status)
    state=self.connect.state
    if state.get('time',0)!=seen[0]:
     seen[0]=state.get('time',0);old=devices.currentData();devices.clear()

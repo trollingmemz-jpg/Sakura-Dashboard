@@ -2,6 +2,9 @@
 import threading
 import time
 import warnings
+import logging, os
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 class WindowsAudio:
  def __init__(self):
@@ -14,6 +17,12 @@ class WindowsAudio:
   self.active_name=''
   self.generation=0
   self.lock=threading.Lock()
+  self.log=logging.getLogger('sakura.windows_audio')
+  if not self.log.handlers:
+   try:
+    root=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';root.mkdir(parents=True,exist_ok=True)
+    handler=RotatingFileHandler(root/'audio.log',maxBytes=262144,backupCount=1,encoding='utf-8');handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'));self.log.addHandler(handler);self.log.setLevel(logging.INFO);self.log.propagate=False
+   except OSError:self.log.addHandler(logging.NullHandler())
   threading.Thread(target=self.run,daemon=True).start()
 
  def read(self):
@@ -67,7 +76,7 @@ class WindowsAudio:
     # Exact matching is important: fuzzy matching can choose a physical microphone.
     mic=next((m for m in sc.all_microphones(include_loopback=True) if str(m.id)==endpoint and getattr(m,'isloopback',False)),None)
     if mic is None:raise RuntimeError('Render loopback endpoint unavailable')
-    options=[(48000,2),(44100,2),(48000,None),(44100,None)]
+    options=[(48000,None),(44100,None),(48000,2),(44100,2)]
     if endpoint in preferred:
      options.remove(preferred[endpoint]);options.insert(0,preferred[endpoint])
     failure=None
@@ -78,6 +87,7 @@ class WindowsAudio:
        self.clear()
        self.active_name=str(speaker.name)
        self.status='WASAPI loopback: '+self.active_name
+       self.log.info('Loopback connected: %s, %s Hz, channels=%s',self.active_name,rate,channels)
        check_at=time.monotonic()+1
        heard=False
        quiet_since=time.monotonic()
@@ -103,6 +113,7 @@ class WindowsAudio:
       break
      except Exception as e:
       failure=e
+      self.log.warning('Loopback format failed: rate=%s channels=%s',rate,channels,exc_info=True)
       if preferred.get(endpoint)==(rate,channels):preferred.pop(endpoint,None)
      finally:
       self.active_name=''
@@ -111,6 +122,7 @@ class WindowsAudio:
      self.status='Audio capture unavailable: '+type(failure).__name__
      self.wait(1)
    except Exception as e:
+    self.log.warning('Audio endpoint error',exc_info=True)
     self.active_name=''
     self.clear()
     self.status='Audio output unavailable: '+type(e).__name__
