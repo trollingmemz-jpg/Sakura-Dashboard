@@ -217,13 +217,18 @@ class Dashboard(QWidget):
    lines=['Sakura Windows support report','Build: '+str(self.updater.build),'Windows version: '+platform.version(),'Architecture: '+platform.machine(),'Game Sync: '+('Running' if self.sync_status else 'Offline'),'Local media detected: '+('Yes' if self.media.state else 'No'),'Local playback active: '+('Yes' if self.media.state.get('playing') else 'No'),'Audio visualiser enabled: '+str(bool(self.display_options.get('visualiser',False)))]
    app=str(self.media.state.get('app','')).lower()
    lines.append('Media source: '+('Spotify' if 'spotify' in app else 'Other media app' if app else 'None'))
+   lines.append('Windows media sessions: '+str(self.media.session_count))
+   lines.append('Spotify media sessions: '+str(self.media.spotify_sessions))
+   lines.append('Media worker error: '+(self.media.error_type or 'None'))
    for port in (6742,6743):
     try:
      with socket.create_connection(('127.0.0.1',port),timeout=.3):lines.append(f'OpenRGB port {port}: reachable (TCP only)')
     except OSError:lines.append(f'OpenRGB port {port}: unavailable')
    rgb=str(self.sync_status.get('rgb',''))
-   match=re.fullmatch(r'OpenRGB: (\d+) selected devices',rgb)
+   match=re.fullmatch(r'OpenRGB: (\d+) selected devices; (\d+) detected; port (6742|6743)',rgb)
    lines.append('RGB selected devices: '+(match.group(1) if match else 'Unknown'))
+   lines.append('RGB detected devices: '+(match.group(2) if match else 'Unknown'))
+   lines.append('OpenRGB SDK connected port: '+(match.group(3) if match else 'Not connected or lighting disabled'))
    for name in ('crash.log','media.log','update.log'):
     lines.append(name+': '+('Present' if (self.sync_root/name).is_file() else 'Not found'))
    return '\n'.join(lines)
