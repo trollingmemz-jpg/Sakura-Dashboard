@@ -163,13 +163,13 @@ class Dashboard(QWidget):
    if self.editor.active:
     options=[('Finish',self.editor.toggle),('Reset layout',self.editor.reset),('Cancel',lambda:None)]
    else:
-    choice=Bloom(self,self.accent,['Lighting','Games','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
+    choice=Bloom(self,self.accent,['Lighting','Spotify','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
     if choice==5:
      QTimer.singleShot(0,self.hide_to_tray);return
     groups=[
      [('Lighting settings',lambda:self.open_settings(1))],
-     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
-     [('Spotify',self.open_player),('Discord',self.open_discord)],
+     [('Spotify & Game Sync',self.open_player)],
+     [('Discord',self.open_discord)],
      [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen)],
      [('System settings',self.open_system),('Updates',self.open_updates),('Exit Sakura',self.close)]
     ]
@@ -363,6 +363,9 @@ class Dashboard(QWidget):
   repeat=QComboBox();repeat.addItems(['off','context','track']);repeat.setCurrentText(self.player.get('repeat_state','off'));layout.addRow('Repeat',repeat)
   discord=QPushButton('Discord connection');discord.clicked.connect(lambda:dlg.done(3));layout.addRow(discord)
   account=QPushButton('Spotify account settings');account.clicked.connect(lambda:dlg.done(2));layout.addRow(account)
+  game_hint=QLabel('Game Sync • Spotify soundtrack switching requires a connected Spotify account. Game detection and lighting do not.');game_hint.setWordWrap(True);layout.addRow(game_hint)
+  for label,code in [('Game Sync settings',5),('Game profiles',6),('Game mappings and scanner',7)]:
+   button=QPushButton(label);button.clicked.connect(lambda checked=False,code=code:dlg.done(code));layout.addRow(button)
   pending=[0.];seen=[None]
   def send(action,**data):
    pending[0]=time.time();status.setText('Requesting '+action+'…');self.command(action,**data)
@@ -393,6 +396,9 @@ class Dashboard(QWidget):
   result=dlg.exec();timer.stop()
   if result==2:self.open_account()
   elif result==3:self.open_discord()
+  elif result==5:self.open_settings(0)
+  elif result==6:self.open_profiles()
+  elif result==7:self.open_sync_settings()
  def poll_player(self):
   try:
    state=self.connect.state
@@ -423,7 +429,7 @@ class Dashboard(QWidget):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura • Settings');dlg.setMinimumWidth(560)
   dlg.setStyleSheet('QDialog{background:#201329;color:#f5d9ef} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox{background:#39253e;color:#f5d9ef;padding:8px;border-radius:5px}')
   outer=QVBoxLayout(dlg);tabs=QTabWidget();outer.addWidget(tabs)
-  general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
+  general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game Sync');tabs.setTabVisible(0,index==0)
   rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
   display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
   edit_layout=QPushButton('Edit layout');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
@@ -459,6 +465,8 @@ class Dashboard(QWidget):
   audio_timer=QTimer(dlg);audio_timer.timeout.connect(lambda:audio_state.setText(self.win_audio.status));audio_timer.start(500)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
+  if index==0:
+   for tab_index in range(1,tabs.count()):tabs.setTabVisible(tab_index,False)
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
   mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('mode'),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
