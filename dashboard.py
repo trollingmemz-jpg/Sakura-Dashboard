@@ -34,7 +34,7 @@ class Dashboard(QWidget):
   self.discord=DiscordConnection();self.game_profile={};self.hit_regions={}
   self.connect=Connect(self.sync_root);self.media=LocalMedia();self.updater=Updater(self.sync_root);self.media_key=None
   self.player={};self.devices=[];self.art_url='';self.art=QImage();self.art_accent=QColor('#f478d7');self.accent=QColor('#f478d7');self.circle_points=[];self.local_playing=None;self.panel_active=False
-  self.spectrum = LiveSpectrum();self.win_audio=WindowsAudio();self.gpu_stats=GPUStats()
+  self.spectrum = LiveSpectrum();self.win_audio=WindowsAudio();self.audio_generation=-1;self.gpu_stats=GPUStats()
   self.spotify_target=None; self.capture_target=None; self.next_capture=0.; self.audio_status='Waiting for Spotify audio'
   self.capture = QProcess(self)
   self.capture.readyReadStandardOutput.connect(self.audio)
@@ -220,6 +220,10 @@ class Dashboard(QWidget):
    lines.append('Windows media sessions: '+str(self.media.session_count))
    lines.append('Spotify media sessions: '+str(self.media.spotify_sessions))
    lines.append('Media worker error: '+(self.media.error_type or 'None'))
+   lines.append('Audio output selection: '+('Manual' if self.win_audio.target else 'Automatic'))
+   lines.append('Audio output count: '+str(len(self.win_audio.outputs)))
+   lines.append('Audio capture: '+('Connected' if self.win_audio.active_name else 'Not connected'))
+   lines.append('Audio signal: '+('Silent' if 'no audio signal' in self.win_audio.status else 'Available or waiting'))
    for port in (6742,6743):
     try:
      with socket.create_connection(('127.0.0.1',port),timeout=.3):lines.append(f'OpenRGB port {port}: reachable (TCP only)')
@@ -311,10 +315,15 @@ class Dashboard(QWidget):
     pending[0]=0.;button.setEnabled(True);status.setText(result.get('error') or 'Spotify connected successfully.')
   button=QPushButton('Connect Spotify');button.clicked.connect(login);layout.addRow(button)
   timer=QTimer(dlg);timer.timeout.connect(update);timer.start(500);dlg.exec();timer.stop()
+ def selected_local_media(self):
+  local=self.media.state
+  # Active local playback takes priority; a paused local session must not hide active Connect playback.
+  return local if local and (local.get('playing') or not self.player.get('is_playing')) else {}
  def playing(self):
-  return bool(self.media.state.get('playing')) if self.media.state else bool(self.player.get('is_playing'))
+  local=self.selected_local_media()
+  return bool(local.get('playing')) if local else bool(self.player.get('is_playing'))
  def command(self,action,**data):
-  if action in ('play','pause','previous','next') and self.media.state:self.media.submit(action)
+  if action in ('play','pause','previous','next') and self.selected_local_media():self.media.submit(action)
   else:self.connect.submit(action,**data)
  def open_player(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Connections / Spotify');layout=QFormLayout(dlg)
@@ -365,7 +374,7 @@ class Dashboard(QWidget):
    state=self.connect.state
    if abs(time.time()-state.get('time',0))<45:self.player=state.get('player') or {};self.devices=state.get('devices',[])
    else:self.player={};self.devices=[]
-   local=self.media.state
+   local=self.selected_local_media()
    if local:
     self.track=(local.get('title') or 'Nothing playing',local.get('artist',''))
     if (local.get('key'),local.get('art'))!=self.media_key:
@@ -373,6 +382,7 @@ class Dashboard(QWidget):
      if not self.art.isNull():
       c=self.art.scaled(1,1,Qt.AspectRatioMode.IgnoreAspectRatio,Qt.TransformationMode.SmoothTransformation).pixelColor(0,0);h,s,v,_=c.getHsvF();self.art_accent=QColor.fromHsvF(max(0,h),max(.35,min(.8,s)),.95)
     return
+   if self.media_key is not None:self.art=QImage();self.art_url='';self.art_accent=QColor('#f478d7')
    self.media_key=None;self.track=('Nothing playing','')
    item=self.player.get('item') or {};images=(item.get('album') or {}).get('images',[]);url=images[0].get('url','') if images else ''
    if url.startswith('https://open.spotify.com/image/'):url=url.replace('https://open.spotify.com/image/','https://i.scdn.co/image/',1)
@@ -415,6 +425,14 @@ class Dashboard(QWidget):
   auto_hide=QCheckBox();auto_hide.setChecked(bool(view.get('game_autohide',True)));dform.addRow('Hide dashboard when a game is on this monitor',auto_hide)
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',False)));dform.addRow('System audio visualiser (WASAPI)',visual)
+  audio_output=QComboBox();audio_output.addItem('Automatic — follow Windows default output','')
+  saved_output=str(view.get('audio_output','') or '')
+  for endpoint,name in self.win_audio.outputs:audio_output.addItem(name,endpoint)
+  if saved_output and audio_output.findData(saved_output)<0:audio_output.addItem('Previously selected output (disconnected)',saved_output)
+  audio_output.setCurrentIndex(max(0,audio_output.findData(saved_output)));dform.addRow('Visualiser audio output',audio_output)
+  audio_hint=QLabel('Captures PC playback only, including Bluetooth output. Remote Spotify Connect speakers do not send audio through this PC.');audio_hint.setWordWrap(True);dform.addRow(audio_hint)
+  audio_state=QLabel(self.win_audio.status);audio_state.setWordWrap(True);dform.addRow('Audio capture status',audio_state)
+  audio_timer=QTimer(dlg);audio_timer.timeout.connect(lambda:audio_state.setText(self.win_audio.status));audio_timer.start(500)
   adaptive_theme=QCheckBox();adaptive_theme.setChecked(bool(view.get('album_theme',False)));dform.addRow('Colours from album artwork',adaptive_theme)
   fps=QComboBox();fps.addItems(['30 FPS','60 FPS']);fps.setCurrentIndex(0 if view.get('fps',60)==30 else 1);dform.addRow('Refresh rate',fps)
   tabs.setCurrentIndex(index)
@@ -454,7 +472,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(self.display_options,petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
+   self.write_setting('dashboard-display.json',dict(self.display_options,petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),audio_output=audio_output.currentData() or '',fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked()));self.load_display()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -468,7 +486,10 @@ class Dashboard(QWidget):
  def audio(self):pass
  def audio_error(self):pass
  def update_spectrum(self):
+  self.win_audio.target=str(self.display_options.get('audio_output','') or '')
   self.win_audio.enabled=bool(self.display_options.get('visualiser',False))
+  if self.audio_generation!=self.win_audio.generation:
+   self.audio_generation=self.win_audio.generation;self.spectrum.reset()
   if not self.win_audio.enabled:
    self.spectrum.reset();self.bars=[0]*80;self.audio_status='System audio visualiser disabled';return
   self.spectrum.feed(self.win_audio.read());self.bars=self.spectrum.tick();self.audio_status=self.win_audio.status
@@ -492,7 +513,7 @@ class Dashboard(QWidget):
  def theme_target(self):
   return QColor(self.game_profile.get('accent','#f478d7')) if self.game_profile else self.art_accent if self.display_options.get('album_theme',False) else QColor('#f478d7')
  def now_playing(self):
-  local=self.media.state
+  local=self.selected_local_media()
   if local:return (local.get('title') or 'Nothing playing',local.get('artist',''))
   state=self.connect.state
   item=(state.get('player') or {}).get('item') or {} if abs(time.time()-state.get('time',0))<45 else {}
