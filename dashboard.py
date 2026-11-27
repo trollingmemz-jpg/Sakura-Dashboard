@@ -104,7 +104,7 @@ class Dashboard(QWidget):
   self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices,room_level) if room_enabled and room_devices else None
   if not room_enabled:self.room_status='Room sync disabled'
   try:
-   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30),visor=self.display_options.get('chroma_visor',True),visor_direction=self.visor_direction,visor_command_at=self.visor_command_at)
+   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30),visor=self.display_options.get('chroma_visor',True),visor_direction=self.visor_direction,visor_command_at=self.visor_command_at,visor_challenge=self.display_options.get('visor_challenge',False))
    if self.chroma_was_enabled!=enabled or (enabled and time.monotonic()-self.chroma_heartbeat>=.5):
     self.write_setting('dashboard-chroma.json',payload);self.chroma_heartbeat=time.monotonic()
    if enabled:
@@ -445,6 +445,8 @@ class Dashboard(QWidget):
   room_status=QLabel(self.room_status);room_status.setWordWrap(True);features.addWidget(room_status)
   room_timer=QTimer(dlg);room_timer.timeout.connect(lambda:room_status.setText(self.room_status));room_timer.start(500)
   chroma_visor=QCheckBox('Visor sweep on colour changes');chroma_visor.setChecked(bool(view.get('chroma_visor',True)));features.addWidget(chroma_visor)
+  visor_challenge=QCheckBox('Visor Challenge — reaction minigame (optional)');visor_challenge.setChecked(bool(view.get('visor_challenge',False)));features.addWidget(visor_challenge)
+  challenge_hint=QLabel('Requires Chroma, individually named keyboard LEDs and existing read access to the K55 keyboard. Only checks a target key for 600 ms after a track skip; normal typing is not blocked.');challenge_hint.setWordWrap(True);features.addWidget(challenge_hint)
   chroma_adaptive=QCheckBox('Adaptive audio sensitivity');chroma_adaptive.setChecked(bool(view.get('chroma_adaptive',True)));features.addWidget(chroma_adaptive)
   reactive_hint=QLabel('Automatically runs Sakura Lighting in the background. Keyboard, RAM and mouse react to local Spotify audio; album colours are used when enabled.');reactive_hint.setWordWrap(True);features.addWidget(reactive_hint)
   feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
@@ -519,7 +521,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(self.display_options,sounds_enabled=sounds_enabled.isChecked(),sounds_volume=sounds_volume.value(),petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),chroma_visor=chroma_visor.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(self.display_options,sounds_enabled=sounds_enabled.isChecked(),sounds_volume=sounds_volume.value(),petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),chroma_visor=chroma_visor.isChecked(),visor_challenge=visor_challenge.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):

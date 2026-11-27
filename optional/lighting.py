@@ -1,5 +1,5 @@
 """Sakura Lighting: standalone user-space RGB controller."""
-import sys, os, json, math, time, colorsys, stat, shutil, threading, fcntl, socket
+import sys, os, json, math, time, colorsys, stat, shutil, threading, fcntl, socket, random, re, struct, select
 from pathlib import Path
 HOME=Path.home()
 ROOT=HOME/'.local/share/sakura-lighting'
@@ -41,7 +41,7 @@ def chroma_data(now=None,data=None):
         palette=[]
         for c in data.get('palette',[])[:4]:
             if isinstance(c,str) and len(c)==7 and c.startswith('#'):palette.append(tuple(int(c[i:i+2],16) for i in (1,3,5)))
-        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),direction=-1 if data.get('visor_direction')==-1 else 1,command_at=float(data.get('visor_command_at',0)),heartbeat=float(data['heartbeat']))
+        return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),direction=-1 if data.get('visor_direction')==-1 else 1,command_at=float(data.get('visor_command_at',0)),challenge=bool(data.get('visor_challenge',False)),heartbeat=float(data['heartbeat']))
     except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
 def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.):
     def level(lo,hi):
@@ -76,6 +76,65 @@ def visor_frame(old,new,progress,brightness,direction=1):
         ceiling=max(max(a),max(b),min(255,brightness*2.55))
         result.append(tuple(max(0,min(255,round(v+(ceiling-v)*edge))) for v in base))
     return result
+class VisorChallenge:
+    """Read only a selected target key during a short, explicitly enabled round.
+    No device grab, persistent key history, or privilege changes."""
+    KEY_CODES=dict(zip('QWERTYUIOP',range(16,26)))
+    KEY_CODES.update(zip('ASDFGHJKL',range(30,39)))
+    KEY_CODES.update(zip('ZXCVBNM',range(44,51)))
+    EVENT=struct.Struct('@llHHi')
+    def __init__(self):
+        self.fd=None;self.target=None;self.deadline=0.;self.flash_until=0.;self.hit=False
+        self.score=0;self.streak=0;self.seen=0.;self.note='Waiting for a track skip'
+    def close(self):
+        if self.fd is not None:
+            try:os.close(self.fd)
+            except OSError:pass
+        self.fd=None
+    def cancel(self):
+        self.close();self.target=None;self.flash_until=0.
+    def start(self,device,stamp,now):
+        self.cancel();self.seen=stamp
+        candidates=[]
+        for i,led in enumerate(device.leds):
+            name=str(getattr(led,'name','')).strip().upper()
+            match=re.fullmatch(r'(?:KEY[ _-]*)?([A-Z])',name)
+            if match and match[1] in self.KEY_CODES:candidates.append((i,match[1]))
+        if not candidates:
+            self.note='Challenge unavailable: no individually named letter LEDs';return
+        # Restrict input to the K55 keyboard; never open unrelated keyboards.
+        for path in sorted(Path('/dev/input/by-id').glob('*event-kbd')):
+            if 'k55' not in path.name.lower():continue
+            try:self.fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK|os.O_CLOEXEC);break
+            except OSError:pass
+        if self.fd is None:
+            self.note='Challenge unavailable: K55 input not readable';return
+        i,key=random.choice(candidates);self.target=(i,key,self.KEY_CODES[key]);self.deadline=now+.60
+        self.note='Hit '+key+'!'
+    def frame(self,values,now,brightness):
+        if self.target is None:return values
+        i,key,code=self.target
+        if i>=len(values):self.cancel();return values
+        if self.fd is not None:
+            try:
+                while select.select([self.fd],[],[],0)[0]:
+                    raw=os.read(self.fd,self.EVENT.size*32)
+                    if not raw:break
+                    for _,_,kind,k,value in self.EVENT.iter_unpack(raw):
+                        if kind==1 and k==code and value==1 and now<=self.deadline:
+                            self.hit=True;self.score+=1;self.streak+=1;self.flash_until=now+.24;self.close();break
+                    if self.fd is None:break
+            except (OSError,ValueError):self.cancel();return values
+            if self.fd is not None and now>=self.deadline:
+                self.hit=False;self.streak=0;self.flash_until=now+.24;self.close()
+        if self.fd is None and now>=self.flash_until:
+            self.target=None;return values
+        values=list(values);level=max(0,min(255,round(brightness*2.55)))
+        if self.fd is not None:values[i]=(level,level,level)
+        else:values[i]=(0,level,0) if self.hit else (level,0,0)
+        self.note=f'Score {self.score} | Streak {self.streak}' if self.fd is None else 'Hit '+key+'!'
+        return values
+
 def frame(rgb,mode,brightness,t,index=0):
     if mode=='Rainbow': rgb=tuple(round(x*255) for x in colorsys.hsv_to_rgb((t/8+index*.12)%1,1,1))
     scale=brightness/100
@@ -193,13 +252,13 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}; consumed_commands={}
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}; consumed_commands={};challenge=VisorChallenge()
         while not halt.wait(max(0.,deadline-time.monotonic())):
             now=time.monotonic();deadline=now+(1/rate if headless else 1/30 if transitions else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
-                blended.clear();transitions.clear();targets.clear();consumed_commands.clear()
+                blended.clear();transitions.clear();targets.clear();consumed_commands.clear();challenge.cancel()
                 continue
             p=state['profile'];errors=[]
             if previous_frame:fps=.85*fps+.15/max(.001,now-previous_frame) if fps else 1/max(.001,now-previous_frame)
@@ -232,6 +291,12 @@ def main():
                 bass_avg+=.04*(bass-bass_avg)
                 if meta['adaptive']:bars=[min(1.,v/max(.45,gain_peak)) for v in bars]
                 if effect_name=='Automatic':effect_name='Bass shockwave' if bass_avg>.42 else 'Ambient flow' if energy<.38 else 'Spectrum'
+            challenge_enabled=bool(chroma is not None and meta.get('challenge') and meta.get('visor') and not state['locked'] and p.get('mode') not in ('Blackout','Rainbow') and p.get('keyboard',{}).get('enabled') and 'keyboard' in devices)
+            if not challenge_enabled:challenge.cancel()
+            elif 0<=time.time()-meta['command_at']<1.5 and meta['command_at']>challenge.seen:
+                # Ignore duplicate transport observations of the same skip.
+                if meta['command_at']-challenge.seen>.25:challenge.start(devices['keyboard'],meta['command_at'],now)
+                else:challenge.seen=meta['command_at']
             for k in rows:
                 if headless and k.startswith('ram') and now-last_write.get(k,-100)<1/30:continue
                 if not p.get(k,{}).get('enabled'):continue
@@ -258,6 +323,7 @@ def main():
                     started,old_values,direction=transitions[k];progress=(now-started)/.6
                     if progress>=1 or len(old_values)!=len(values):transitions.pop(k,None)
                     else:values=visor_frame(old_values,values,progress,power,direction)
+                if k=='keyboard' and challenge_enabled:values=challenge.frame(values,now,power)
                 signature=tuple(values)
                 if last.get(k)==signature:continue
                 try:
@@ -269,9 +335,9 @@ def main():
                     last[k]=signature;last_write[k]=now
                 except Exception as e:
                     errors.append(k+': '+str(e))
-                    if k!='mouse':disconnect();transitions.clear();targets.clear();retry=now+5
-            state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | {latency:.0f} ms packet age | {effect_name} | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
-        disconnect()
+                    if k!='mouse':disconnect();transitions.clear();targets.clear();challenge.cancel();retry=now+5
+            state['status']=(f'Chroma Sync active | {fps:.0f} FPS worker | {latency:.0f} ms packet age | {effect_name} | ' if chroma is not None else '')+'Detected: '+(', '.join(devices) or 'no SDK devices')+(' | Visor Challenge: '+challenge.note if challenge_enabled else '')+' | Mouse: '+('active' if 'mouse' in last else 'not active')+(' | '+'; '.join(errors) if errors else '')
+        challenge.cancel();disconnect()
     thread=threading.Thread(target=worker,daemon=True);thread.start()
     def close():
         halt.set();state['active']=False;mobile_status.unlink(missing_ok=True)
