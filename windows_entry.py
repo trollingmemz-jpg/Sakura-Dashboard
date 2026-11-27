@@ -10,6 +10,14 @@ def main():
   from winrt.windows.storage.streams import DataReader
   from winrt.windows.ui.notifications.management import UserNotificationListener
   import windows_mobile,qrcode,cryptography
+  from PySide6.QtWidgets import QApplication,QWidget
+  from windows_theme import apply_theme
+  from inline_panel import InlinePanel,PanelSurface
+  from PySide6.QtGui import QColor
+  app=QApplication([]);apply_theme(app)
+  host=QWidget();panel=InlinePanel(host);panel.resize(200,120);surface=PanelSurface(panel);surface.resize(100,80)
+  for widget in (panel,surface):
+   if widget.grab().toImage().pixelColor(20,20)!=QColor('#201329'):raise RuntimeError('Sakura panel background smoke test failed')
   import bloom,layout_editor,desktop_notifications,live_lyrics,responsive_layout,windows_notifications
   return
  try:

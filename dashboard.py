@@ -658,6 +658,8 @@ class Dashboard(QWidget):
    p.setPen(QPen(self.accent,2))
    for a,b in zip(self.circle_points,self.circle_points[1:]):p.drawLine(QPointF(*a),QPointF(*b))
 app=QApplication(sys.argv)
+from windows_theme import apply_theme
+apply_theme(app)
 from PySide6.QtCore import QLockFile
 state=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'Sakura'/'state';state.mkdir(parents=True,exist_ok=True)
 lock=QLockFile(str(state/'dashboard.lock'));lock.setStaleLockTime(0)
