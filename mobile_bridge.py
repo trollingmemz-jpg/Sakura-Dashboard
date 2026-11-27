@@ -117,6 +117,8 @@ def command(data):
     action=data.get('action')
     media={'previous':'previous','next':'next','play_pause':'play-pause'}
     if action in media:
+        if action in ('previous','next'):
+            atomic(Path.home()/'.config/sakura-game-sync/visor-command.json',{'time':time.time(),'direction':-1 if action=='previous' else 1})
         run('playerctl',media[action])
     elif action=='volume':
         run('wpctl','set-volume','@DEFAULT_AUDIO_SINK@',str(percent(data.get('percent')))+'%')

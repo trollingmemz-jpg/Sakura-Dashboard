@@ -90,6 +90,12 @@ class Dashboard(QWidget):
  def publish_chroma(self):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
+  try:
+   hint=json.loads((self.sync_root/'visor-command.json').read_text())
+   stamp=float(hint.get('time',0))
+   if self.visor_command_at<stamp<=time.time()+1:
+    self.visor_command_at=stamp;self.visor_direction=-1 if hint.get('direction')==-1 else 1
+  except (OSError,ValueError,TypeError):pass
   room_enabled=bool(self.display_options.get('room_sync',False))
   room_devices=tuple(dict.fromkeys(n.strip() for n in str(self.display_options.get('room_device','bulb,cupboard')).split(',') if n.strip()))
   room_level=min(1.,max(self.bars[:24],default=0.)*1.35) if enabled else 1.

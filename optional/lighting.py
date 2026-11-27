@@ -239,9 +239,9 @@ def main():
                 use_visor=(meta.get('visor',True) if chroma is not None else p.get('visor',True)) and p['mode'] not in ('Blackout','Rainbow')
                 old_target=targets.get(k);targets[k]=target_color
                 if use_visor and old_target is not None and old_target!=target_color and k in last:
-                    direction=1
-                    if chroma is not None and 0<=time.time()-meta['command_at']<10 and consumed_commands.get(k)!=meta['command_at']:
-                        direction=meta['direction'];consumed_commands[k]=meta['command_at']
+                    # Artwork can briefly disappear or change multiple times during a skip.
+                    # Keep the requested direction for the whole artwork settling window.
+                    direction=meta['direction'] if chroma is not None and 0<=time.time()-meta['command_at']<30 else 1
                     transitions[k]=(now,last[k],direction)
                 elif not use_visor:transitions.pop(k,None)
                 previous=blended.get(k,manual);base=target_color if use_visor else tuple(a+(b-a)*.35 for a,b in zip(previous,target_color));blended[k]=base
