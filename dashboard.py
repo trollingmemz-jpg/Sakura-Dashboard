@@ -9,6 +9,7 @@ import urllib.request
 from bloom import Bloom, paint_settings_petal
 from spotify_connect import Connect
 from inline_panel import InlinePanel
+from sakura_sounds import SakuraSounds
 from source_volume import add_volume
 from mobile_panel import MobileCompanion
 from discord_connection import DiscordConnection
@@ -47,6 +48,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.sounds=SakuraSounds(self);QTimer.singleShot(250,self.sounds.startup)
   self.game_autohide=AutoHide(self)
   self.tray=None;self.tray_hidden=False;self.tray_lyrics=False
   self.notifications=Notifications(self)
@@ -408,6 +410,8 @@ class Dashboard(QWidget):
   try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
   except (OSError,ValueError):view={}
   if not isinstance(view,dict):view={}
+  sounds_enabled=QCheckBox();sounds_enabled.setChecked(bool(view.get('sounds_enabled',True)));dform.addRow('Sakura startup and shutdown sounds',sounds_enabled)
+  sounds_volume=QSlider(Qt.Orientation.Horizontal);sounds_volume.setRange(0,100);sounds_volume.setValue(int(view.get('sounds_volume',70)));dform.addRow('Sakura sounds volume',sounds_volume)
   auto_hide=QCheckBox();auto_hide.setChecked(bool(view.get('game_autohide',True)));dform.addRow('Hide dashboard when a game is on this monitor',auto_hide)
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
@@ -501,7 +505,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(self.display_options,sounds_enabled=sounds_enabled.isChecked(),sounds_volume=sounds_volume.value(),petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -563,6 +567,9 @@ class Dashboard(QWidget):
   self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
+  if getattr(self,'_closing_sakura',False):event.ignore();return
+  self._closing_sakura=True
+  self.hide();self.sounds.shutdown()
   QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
   self.metadata_stop.set()
