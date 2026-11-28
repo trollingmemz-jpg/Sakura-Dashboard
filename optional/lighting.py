@@ -43,7 +43,7 @@ def chroma_data(now=None,data=None):
             if isinstance(c,str) and len(c)==7 and c.startswith('#'):palette.append(tuple(int(c[i:i+2],16) for i in (1,3,5)))
         return rgb,bars,dict(effect=data.get('effect','Spectrum'),palette=palette,adaptive=bool(data.get('adaptive',True)),rate=60 if data.get('rate')==60 else 30,visor=bool(data.get('visor',True)),direction=-1 if data.get('visor_direction')==-1 else 1,command_at=float(data.get('visor_command_at',0)),challenge=bool(data.get('visor_challenge',False)),heartbeat=float(data['heartbeat']))
     except (AttributeError,KeyError,TypeError,ValueError,OverflowError):return None
-def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.):
+def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),beat_age=10.,now=0.,ripples=None):
     def level(lo,hi):
         values=bars[lo:hi]
         return sum(values)/len(values) if values else 0.
@@ -51,7 +51,21 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
     if effect=='Ambient flow':
         energy=level(0,65);return [rgb(.2+.55*energy+.25*(1+math.sin(now*2-i*math.tau/max(1,count)))/2) for i in range(count)]
     if effect=='Bass shockwave':
-        return [rgb(max(level(0,12)*.35,max(0.,1-abs(i/max(1,count-1)-beat_age*2.5)*5)*max(0.,1-beat_age))) for i in range(count)]
+        waves=((now-beat_age,1.),) if ripples is None else ripples
+        result=[]
+        for i in range(count):
+            x=i/max(1,count-1)
+            combined=0.
+            for started,strength in waves:
+                age=now-started
+                width=.10+.14*strength
+                front=age*2.0
+                pulse=max(0.,1-abs(x-front)/width)
+                pulse=pulse*pulse*(3-2*pulse)
+                amount=pulse*(.45+.55*strength)*max(0.,1-age*.65)
+                combined=1-(1-combined)*(1-amount)
+            result.append(rgb(max(level(0,12)*.35,combined)))
+        return result
     if effect=='Album palette' and palette:
         return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count)),palette[min(len(palette)-1,i*len(palette)//count)]) for i in range(count)]
     if key=='mouse':return [rgb(level(0,12))]
@@ -252,13 +266,13 @@ def main():
                 try: client.disconnect()
                 except Exception: pass
             client=None;devices={};last.clear()
-        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;gain_peak=.5; transitions={}; targets={}; consumed_commands={};challenge=VisorChallenge()
+        multiplier=1.0; blended={};deadline=time.monotonic();fps=0.;previous_frame=0.;packet=None;rate=30;last_write={};bass_avg=0.;beat_at=-100.;ripples=[];gain_peak=.5; transitions={}; targets={}; consumed_commands={};challenge=VisorChallenge()
         while not halt.wait(max(0.,deadline-time.monotonic())):
             now=time.monotonic();deadline=now+(1/rate if headless else 1/30 if transitions else .12)
             if not state['active'] or not released():
                 if state['active']:state['active']=False;state['status']='Released: Game Sync lighting is not off.'
                 if client or last:disconnect()
-                blended.clear();transitions.clear();targets.clear();consumed_commands.clear();challenge.cancel()
+                blended.clear();transitions.clear();targets.clear();consumed_commands.clear();challenge.cancel();ripples.clear();beat_at=-100.;bass_avg=0.
                 continue
             p=state['profile'];errors=[]
             if previous_frame:fps=.85*fps+.15/max(.001,now-previous_frame) if fps else 1/max(.001,now-previous_frame)
@@ -287,10 +301,16 @@ def main():
             if chroma:
                 bars=chroma[1];meta=chroma[2];rate=meta['rate'];effect_name=meta['effect'];palette=meta['palette'];latency=max(0.,(time.time()-meta['heartbeat'])*1000)
                 bass=sum(bars[:12])/12;energy=max(bars);gain_peak=max(.25,energy,gain_peak*.998)
-                if bass>max(.16,bass_avg+.075) and now-beat_at>.18:beat_at=now
+                if bass>max(.16,bass_avg+.075) and now-beat_at>.10:
+                    beat_at=now
+                    ripples.append((now,max(0.,min(1.,bass/max(.45,gain_peak)))))
+                    ripples=ripples[-8:]
+                ripples=[wave for wave in ripples if now-wave[0]<.65]
                 bass_avg+=.04*(bass-bass_avg)
                 if meta['adaptive']:bars=[min(1.,v/max(.45,gain_peak)) for v in bars]
                 if effect_name=='Automatic':effect_name='Bass shockwave' if bass_avg>.42 else 'Ambient flow' if energy<.38 else 'Spectrum'
+            if chroma is None:
+                ripples.clear();beat_at=-100.;bass_avg=0.
             challenge_enabled=bool(chroma is not None and meta.get('challenge') and meta.get('visor') and not state['locked'] and p.get('mode') not in ('Blackout','Rainbow') and p.get('keyboard',{}).get('enabled') and 'keyboard' in devices)
             if not challenge_enabled:challenge.cancel()
             elif 0<=time.time()-meta['command_at']<1.5 and meta['command_at']>challenge.seen:
@@ -315,7 +335,7 @@ def main():
                 if chroma is not None:
                     count=1 if k=='mouse' else len(devices[k].leds) if k in devices else 0
                     if not count:continue
-                    values=reactive_frame(base,bars,k,count,power,effect_name,palette,now-beat_at,now) if p['mode']!='Blackout' else [(0,0,0)]*count
+                    values=reactive_frame(base,bars,k,count,power,effect_name,palette,now-beat_at,now,ripples) if p['mode']!='Blackout' else [(0,0,0)]*count
                 else:
                     rgb=frame(base,effect,power,now);values=[rgb]*(1 if k=='mouse' else len(devices[k].leds) if k in devices else 0)
                 if not values:continue
