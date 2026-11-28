@@ -33,7 +33,7 @@ def save(data):
 
 API = 'https://sakura-support.codex-mailbox-c46153a.workers.dev'
 def request(path, device, token=None, payload=None):
-    headers = {'Accept': 'application/json'}
+    headers = {'Accept': 'application/json', 'User-Agent': 'Sakura-Dashboard/1.0'}
     if token:
         headers.update({'Authorization': 'Bearer '+token, 'X-Device-UUID': device})
     if payload is not None: headers['Content-Type'] = 'application/json'
