@@ -46,9 +46,15 @@ def request(path, device, token=None, payload=None):
         with urllib.request.build_opener(NoRedirect()).open(req, timeout=12) as response:
             return json.loads(response.read(1024*1024))
     except urllib.error.HTTPError as exc:
-        raise RuntimeError('Support API returned HTTP '+str(exc.code)) from None
-    except (OSError, ValueError):
-        raise RuntimeError('Could not confirm delivery or connect to Sakura Support') from None
+        reason = ''
+        try:
+            response = json.loads(exc.read(4096))
+            reason = str(response.get('error', ''))[:240]
+        except (ValueError, OSError, AttributeError):
+            pass
+        raise RuntimeError('Support API HTTP '+str(exc.code)+(' — '+reason if reason else '')) from None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError('Support connection failed: '+type(exc).__name__+' — '+str(exc)[:240]) from None
 
 def support_panel(host):
     if getattr(host, '_support_busy', False):
@@ -100,8 +106,8 @@ def support_panel(host):
     submit = QPushButton('Submit report'); report.addWidget(submit)
     messages = page('Messages')
     label('Select a submitted report to retrieve developer replies. Old preview reports remain local.', messages)
-    items = QListWidget(); messages.addWidget(items)
-    detail = QPlainTextEdit(); detail.setReadOnly(True); messages.addWidget(detail)
+    items = QListWidget(); items.setMinimumHeight(90); items.setMaximumHeight(140); messages.addWidget(items)
+    detail = QPlainTextEdit(); detail.setReadOnly(True); detail.setMinimumHeight(100); messages.addWidget(detail)
     send = QPushButton('Refresh developer replies'); messages.addWidget(send)
     privacy = page('Privacy')
     label('Manual submissions go to the Sakura team through Cloudflare and private GitHub Issues. Do not include secrets or personal information. Server-side deletion is not available yet.', privacy)
@@ -175,7 +181,7 @@ def support_panel(host):
             return answer
         def done(value, error):
             if error:
-                entry['status']='unconfirmed'; persist()
+                entry['status']='unconfirmed'; entry['delivery_error']=error; persist()
                 status.setText(error+' — check GitHub before submitting again.')
             refresh(); items.setCurrentRow(len(data['reports'])-1)
         launch(work, done)
@@ -185,7 +191,7 @@ def support_panel(host):
         entry=data['reports'][row]
         lines=[entry['title'], 'Status: '+str(entry.get('status','local preview')),
                'GitHub issue: '+str(entry.get('issue_number') or 'Not confirmed'),
-               '', entry.get('description','')]
+               'Error: '+str(entry.get('delivery_error','None recorded')), '', entry.get('description','')]
         for msg in entry.get('developer_messages',[]):
             lines.extend(['',msg.get('author','Sakura Development Team')+' · '+msg.get('created_at',''),msg.get('message','')])
         detail.setPlainText('\n'.join(lines))
