@@ -3,7 +3,7 @@ import json, os, uuid, platform, queue, threading, tempfile
 import urllib.request, urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, QTimer, QObject
+from PySide6.QtCore import Qt, QTimer, QObject, QUrl
 from PySide6.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QWidget, QLineEdit, QPlainTextEdit, QCheckBox,
     QListWidget, QMessageBox)
@@ -244,6 +244,55 @@ class SupportReplyMonitor(QObject):
         self.drain_timer.timeout.connect(self.drain)
         self.drain_timer.start()
         QTimer.singleShot(5000, self.poll)
+        self.socket = None
+        self.push_identity = None
+        self.push_queue = set()
+        self.reconnect_timer = QTimer(self)
+        self.reconnect_timer.setInterval(30000)
+        self.reconnect_timer.timeout.connect(self.connect_push)
+        self.reconnect_timer.start()
+        QTimer.singleShot(6000, self.connect_push)
+
+    def connect_push(self):
+        try:
+            from PySide6.QtWebSockets import QWebSocket
+            from PySide6.QtNetwork import QNetworkRequest, QAbstractSocket
+        except ImportError:
+            self.reconnect_timer.stop()
+            return
+        data = load() if FILE.exists() else {}
+        token, device = data.get('token'), data.get('uuid')
+        if not token or not self.host.notifications.enabled:
+            if self.socket: self.socket.abort()
+            return
+        identity = (device, token)
+        if self.socket is None:
+            self.socket = QWebSocket()
+            self.socket.setParent(self)
+            self.socket.textMessageReceived.connect(self.push_received)
+            self.socket.connected.connect(self.poll)
+        if self.push_identity != identity:
+            self.socket.abort()
+        elif self.socket.state() in (QAbstractSocket.SocketState.ConnectedState,
+                                      QAbstractSocket.SocketState.ConnectingState):
+            return
+        self.push_identity = identity
+        req = QNetworkRequest(QUrl(API.replace('https://','wss://',1)+'/push'))
+        req.setRawHeader(b'Authorization', ('Bearer '+token).encode())
+        req.setRawHeader(b'X-Device-UUID', device.encode())
+        req.setRawHeader(b'User-Agent', b'Sakura-Dashboard/1.0')
+        self.socket.open(req)
+
+    def push_received(self, raw):
+        if len(raw) > 4096: return
+        try:
+            event = json.loads(raw)
+            if event.get('type') != 'reply': return
+            report_id = str(uuid.UUID(event['report_id']))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return
+        self.push_queue.add(report_id)
+        self.poll()
 
     def poll(self):
         if self.busy or getattr(self.host, '_support_busy', False):
@@ -255,10 +304,15 @@ class SupportReplyMonitor(QObject):
         reports = [r for r in data.get('reports', [])
                    if r.get('issue_number') and r.get('id')]
         if not token or not reports:
+            self.push_queue.clear()
             return
+        self.push_queue.intersection_update(r['id'] for r in reports)
         # 40 requests/hour at most, leaving room for manual refreshes.
-        entry = reports[self.cursor % len(reports)]
-        self.cursor += 1
+        entry = next((r for r in reports if r['id'] in self.push_queue), None)
+        if entry is None:
+            entry = reports[self.cursor % len(reports)]
+            self.cursor += 1
+        self.push_queue.discard(entry['id'])
         device = data['uuid']
         report_id = entry['id']
         self.busy = True
@@ -276,6 +330,8 @@ class SupportReplyMonitor(QObject):
         except queue.Empty:
             return
         self.busy = False
+        if self.push_queue:
+            QTimer.singleShot(1000, self.poll)
         if result is None or not self.host.notifications.enabled:
             return
         device, report_id, response = result
@@ -333,3 +389,5 @@ class SupportReplyMonitor(QObject):
     def close(self):
         self.timer.stop()
         self.drain_timer.stop()
+        self.reconnect_timer.stop()
+        if self.socket: self.socket.abort()
