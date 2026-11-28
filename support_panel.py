@@ -3,7 +3,7 @@ import json, os, uuid, platform, queue, threading, tempfile
 import urllib.request, urllib.error
 from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QObject
 from PySide6.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QWidget, QLineEdit, QPlainTextEdit, QCheckBox,
     QListWidget, QMessageBox)
@@ -220,3 +220,116 @@ def support_panel(host):
         persist(); identity.setText(data['uuid']); auto.setChecked(False); hardware.setChecked(False); perf.setChecked(False); refresh(); refresh_preview()
     delete.clicked.connect(reset); privacy.addStretch()
     refresh(); refresh_preview(); panel.exec(); timer.stop()
+
+
+class SupportReplyMonitor(QObject):
+    """Poll one confirmed report at a time, without uploading diagnostics.
+
+    A separate notification ledger avoids overwriting the Support panel's
+    state while a manual submission or reply refresh is running.
+    """
+    def __init__(self, host):
+        super().__init__(host)
+        self.host = host
+        self.results = queue.Queue()
+        self.busy = False
+        self.cursor = 0
+        self.ledger_path = ROOT/'support-notified.json'
+        self.timer = QTimer(self)
+        self.timer.setInterval(90000)
+        self.timer.timeout.connect(self.poll)
+        self.timer.start()
+        self.drain_timer = QTimer(self)
+        self.drain_timer.setInterval(500)
+        self.drain_timer.timeout.connect(self.drain)
+        self.drain_timer.start()
+        QTimer.singleShot(5000, self.poll)
+
+    def poll(self):
+        if self.busy or getattr(self.host, '_support_busy', False):
+            return
+        if not self.host.notifications.enabled or not FILE.exists():
+            return
+        data = load()
+        token = data.get('token')
+        reports = [r for r in data.get('reports', [])
+                   if r.get('issue_number') and r.get('id')]
+        if not token or not reports:
+            return
+        # 40 requests/hour at most, leaving room for manual refreshes.
+        entry = reports[self.cursor % len(reports)]
+        self.cursor += 1
+        device = data['uuid']
+        report_id = entry['id']
+        self.busy = True
+        def work():
+            try:
+                response = request('/messages/'+report_id, device, token)
+                self.results.put((device, report_id, response))
+            except Exception:
+                self.results.put(None)
+        threading.Thread(target=work, daemon=True).start()
+
+    def drain(self):
+        try:
+            result = self.results.get_nowait()
+        except queue.Empty:
+            return
+        self.busy = False
+        if result is None or not self.host.notifications.enabled:
+            return
+        device, report_id, response = result
+        data = load()
+        if device != data.get('uuid') or not data.get('token'):
+            return
+        entry = next((r for r in data.get('reports', [])
+                      if r.get('id') == report_id), None)
+        if entry is None:
+            return
+        try:
+            ledger = json.loads(self.ledger_path.read_text())
+            if not isinstance(ledger, dict):
+                ledger = {}
+        except (OSError, ValueError):
+            ledger = {}
+        key = device+':'+report_id
+        seen = set(str(i) for i in ledger.get(key, []))
+        # Replies already fetched manually are not new notifications.
+        seen.update(str(m['id']) for m in entry.get('developer_messages', [])
+                    if m.get('id') is not None)
+        fresh = []
+        for msg in response.get('messages', []):
+            if msg.get('id') is None:
+                continue
+            mid = str(msg['id'])
+            if mid not in seen:
+                seen.add(mid)
+                fresh.append(msg)
+        ledger[key] = sorted(seen)
+        try:
+            ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix='support-notified-', dir=ROOT)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(ledger, f)
+                os.replace(tmp, self.ledger_path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        except OSError:
+            return  # Avoid repeating pop-ups if the ledger cannot persist.
+        if fresh:
+            import time
+            count = len(fresh)
+            title = 'New developer reply' if count == 1 else str(count)+' new developer replies'
+            issue = str(entry.get('issue_number'))
+            body = 'Issue #'+issue+' — '+str(entry.get('title',''))[:100]
+            body += ' · Open Sakura Support / Messages'
+            item = ('Sakura Support', title, body, time.time())
+            self.host.notifications.history.appendleft(item)
+            self.host.notifications.pending.append(item)
+            self.host.update()
+
+    def close(self):
+        self.timer.stop()
+        self.drain_timer.stop()
