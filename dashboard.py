@@ -53,6 +53,8 @@ class Dashboard(QWidget):
   self.game_autohide=AutoHide(self)
   self.tray=None;self.tray_hidden=False;self.tray_lyrics=False
   self.notifications=Notifications(self)
+  from support_panel import SupportReplyMonitor
+  self.support_reply_monitor=SupportReplyMonitor(self)
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.visor_direction=1;self.visor_command_at=0.
@@ -204,7 +206,7 @@ class Dashboard(QWidget):
      [('Spotify & Game Sync',self.open_player)],
      [('Discord',self.open_discord),('Media',self.open_media)],
      [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen)],
-     [('System settings',self.open_system),('Exit Sakura',self.close)]
+     [('System settings',self.open_system),('Sakura Support',self.open_support),('Exit Sakura',self.close)]
     ]
     if choice<0:return
     options=groups[choice]
@@ -251,6 +253,10 @@ class Dashboard(QWidget):
  def bloom_again(self):QTimer.singleShot(0,self.bloom_menu)
  def toggle_fullscreen(self):
   self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
+ def open_support(self):
+  from support_panel import support_panel
+  support_panel(self)
 
  def open_system(self):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura / System');layout=QVBoxLayout(dlg)
@@ -590,6 +596,7 @@ class Dashboard(QWidget):
   QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
   self.metadata_stop.set()
+  self.support_reply_monitor.close()
   self.notifications.close()
   self.media_bridge.stop();self.discord.disconnect();self.connect.closed=True
   self.sync_timer.stop()
