@@ -444,7 +444,7 @@ class Dashboard(QWidget):
   interpreter=Path.home()/'.local/share/sakura-game-sync/venv/bin/python'
   if not interpreter.is_file():interpreter=Path(sys.executable)
   hardware_visualiser=QCheckBox('Enable media-reactive hardware lighting');hardware_visualiser.setChecked(bool(view.get('hardware_visualiser',False)));features.addWidget(hardware_visualiser)
-  chroma_effect=QComboBox();chroma_effect.addItems(['Spectrum','Bass shockwave','Ambient flow','Album palette','Automatic']);chroma_effect.setCurrentText(view.get('chroma_effect','Spectrum'));features.addWidget(QLabel('Media lighting effect'));features.addWidget(chroma_effect)
+  chroma_effect=QComboBox();chroma_effect.addItems(['Spectrum','Bass shockwave','Centre ripple','Ambient flow','Album palette','Automatic']);chroma_effect.setCurrentText(view.get('chroma_effect','Spectrum'));features.addWidget(QLabel('Media lighting effect'));features.addWidget(chroma_effect)
   chroma_rate=QComboBox();chroma_rate.addItems(['30 FPS — compatibility','60 FPS — low latency']);chroma_rate.setCurrentIndex(1 if view.get('chroma_rate',30)==60 else 0);features.addWidget(chroma_rate)
   room_sync=QCheckBox('Sync room lights with Chroma (album colours and audio)');room_sync.setChecked(bool(view.get('room_sync',False)));features.addWidget(room_sync)
   room_device=QLineEdit(str(view.get('room_device','bulb,cupboard')));features.addWidget(QLabel('Lightctl device names (comma-separated)'));features.addWidget(room_device)
