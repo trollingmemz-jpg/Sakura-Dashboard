@@ -105,10 +105,13 @@ def support_panel(host):
     preview = QPlainTextEdit(); preview.setReadOnly(True); report.addWidget(preview)
     submit = QPushButton('Submit report'); report.addWidget(submit)
     messages = page('Messages')
-    label('Select a submitted report to retrieve developer replies. Old preview reports remain local.', messages)
+    label('Select a submitted report to view the conversation. Replies are sent privately to the Sakura team.', messages)
     items = QListWidget(); items.setMinimumHeight(90); items.setMaximumHeight(140); messages.addWidget(items)
     detail = QPlainTextEdit(); detail.setReadOnly(True); detail.setMinimumHeight(100); messages.addWidget(detail)
-    send = QPushButton('Refresh developer replies'); messages.addWidget(send)
+    send = QPushButton('Refresh conversation'); messages.addWidget(send)
+    reply = QPlainTextEdit(); reply.setPlaceholderText('Write a reply to the Sakura team…'); reply.setMaximumHeight(85); messages.addWidget(reply)
+    reply_status = label('', messages)
+    reply_button = QPushButton('Send reply'); reply_button.setEnabled(False); messages.addWidget(reply_button)
     privacy = page('Privacy')
     label('Manual submissions go to the Sakura team through Cloudflare and private GitHub Issues. Do not include secrets or personal information. Server-side deletion is not available yet.', privacy)
     auto = QCheckBox('Allow automatic crash reporting in a future connected version')
@@ -145,7 +148,7 @@ def support_panel(host):
         if getattr(host, '_support_busy', False): return
         host._support_busy = True
         status.setText('Contacting Sakura Support…')
-        submit.setEnabled(False); send.setEnabled(False); hardware.setEnabled(False); delete.setEnabled(False)
+        submit.setEnabled(False); send.setEnabled(False); hardware.setEnabled(False); delete.setEnabled(False); reply_button.setEnabled(False); reply.setEnabled(False); items.setEnabled(False)
         def run():
             try: results.put((done, work(), None))
             except Exception as exc: results.put((done, None, str(exc)))
@@ -157,7 +160,7 @@ def support_panel(host):
         if error: status.setText(error)
         else: status.setText('Sakura Support connected')
         done(value, error)
-        send.setEnabled(True); hardware.setEnabled(True); delete.setEnabled(not data.get('token')); refresh_preview()
+        send.setEnabled(True); hardware.setEnabled(True); delete.setEnabled(not data.get('token')); items.setEnabled(True); reply.setEnabled(True); refresh_preview(); update_reply_button()
     timer.timeout.connect(drain); timer.start(100)
     def submit_report():
         if not consent.isChecked() or not submit.isEnabled(): return
@@ -193,7 +196,7 @@ def support_panel(host):
                'GitHub issue: '+str(entry.get('issue_number') or 'Not confirmed'),
                'Error: '+str(entry.get('delivery_error','None recorded')), '', entry.get('description','')]
         for msg in entry.get('developer_messages',[]):
-            lines.extend(['',msg.get('author','Sakura Development Team')+' · '+msg.get('created_at',''),msg.get('message','')])
+            lines.extend(['',('You' if msg.get('direction')=='user' else msg.get('author','Sakura Development Team'))+' · '+msg.get('created_at',''),msg.get('message','')])
         detail.setPlainText('\n'.join(lines))
     def refresh_messages():
         row=items.currentRow()
@@ -210,7 +213,58 @@ def support_panel(host):
         def done(value,error):
             if items.currentRow()==row: show_report(row)
         launch(work,done)
-    submit.clicked.connect(submit_report); items.currentRowChanged.connect(show_report); send.clicked.connect(refresh_messages)
+    def update_reply_button(*args):
+        row = items.currentRow()
+        eligible = 0 <= row < len(data['reports']) and bool(data.get('token')) and bool(data['reports'][row].get('issue_number'))
+        value = reply.toPlainText().strip()
+        reply_button.setEnabled(eligible and not getattr(host, '_support_busy', False) and 0 < len(value) <= 2000)
+
+    def send_user_reply():
+        if not reply_button.isEnabled(): return
+        row = items.currentRow()
+        entry = data['reports'][row]
+        value = reply.toPlainText().strip()
+        if QMessageBox.question(panel, 'Send private reply', 'Send this message to the Sakura development team on the private GitHub issue?') != QMessageBox.StandardButton.Yes:
+            return
+        # Persist an idempotency key before sending. An uncertain delivery must
+        # never silently become a new comment on retry.
+        pending = entry.get('pending_user_reply')
+        if pending and pending.get('message') != value:
+            reply_status.setText('Previous reply delivery is unconfirmed. Restore that exact message to retry.')
+            return
+        if not pending:
+            pending = {'id':str(uuid.uuid4()), 'message':value, 'consent':True}
+            entry['pending_user_reply'] = pending
+            if not persist():
+                entry.pop('pending_user_reply',None); return
+        def work():
+            result = request('/reply/'+entry['id'], data['uuid'], data['token'], pending)
+            if not result.get('success') or not isinstance(result.get('message'), dict):
+                raise RuntimeError('Reply delivery not confirmed')
+            msg = result['message']
+            history = entry.setdefault('developer_messages', [])
+            if not any(m.get('id') == msg.get('id') for m in history): history.append(msg)
+            entry.pop('pending_user_reply', None)
+            save(data)
+            return result
+        def done(result,error):
+            if error:
+                reply_status.setText(error+' — message retained; retry the same text.')
+            else:
+                reply.clear(); reply_status.setText('Reply sent.')
+            show_report(row)
+        reply_status.setText('Sending…')
+        launch(work,done)
+
+    def select_report(row):
+        show_report(row)
+        pending = data['reports'][row].get('pending_user_reply') if 0 <= row < len(data['reports']) else None
+        reply.setPlainText(pending.get('message','') if pending else '')
+        reply_status.setText('Previous delivery unconfirmed; retry the same message.' if pending else '')
+        update_reply_button()
+
+    submit.clicked.connect(submit_report); items.currentRowChanged.connect(select_report); send.clicked.connect(refresh_messages)
+    reply.textChanged.connect(update_reply_button); reply_button.clicked.connect(send_user_reply)
     delete = QPushButton('Reset local preview data'); privacy.addWidget(delete)
     delete.setEnabled(not data.get('token'))
     def reset():
@@ -355,7 +409,7 @@ class SupportReplyMonitor(QObject):
                     if m.get('id') is not None)
         fresh = []
         for msg in response.get('messages', []):
-            if msg.get('id') is None:
+            if msg.get('id') is None or msg.get('direction') == 'user':
                 continue
             mid = str(msg['id'])
             if mid not in seen:
