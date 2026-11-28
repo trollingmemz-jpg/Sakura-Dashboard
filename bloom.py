@@ -42,15 +42,27 @@ class Bloom(InlinePanel):
   rot=(i-1+u)*360/n if i else 0
   scale=1 if i else .2+.8*u
   return t,x,y,rot,scale
+ def transformed_path(self,i,elapsed):
+  t,x,y,rot,scale=self.geometry_at(i,elapsed)
+  if t<=0:return QPainterPath()
+  tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
+  return tr.map(self.path)
+ def visible_paths(self,elapsed):
+  # Every petal owns its counterclockwise overlap and yields to the next.
+  # Use a single geometry rule for all six seams, including the wraparound.
+  paths=[self.transformed_path(i,elapsed) for i in range(len(self.labels))]
+  n=len(paths)
+  if n<4:return paths
+  return [path.subtracted(paths[(i+1)%n]) for i,path in enumerate(paths)]
  def hit(self,p,elapsed):
   if p is None or math.hypot(p.x(),p.y())<30:return -1
-  # Use the same animated geometry as the painter, with a small forgiving margin.
-  for j in range(len(self.labels)-1,-1,-1):
-   t,x,y,rot,scale=self.geometry_at(j,elapsed)
-   if t<=0:continue
-   tr=QTransform();tr.translate(x,y);tr.rotate(rot);tr.scale(scale,scale)
-   inv,valid=tr.inverted()
-   if valid and self.hit_path.contains(inv.map(p)):return j
+  visible=self.visible_paths(elapsed)
+  for j in range(len(visible)-1,-1,-1):
+   if visible[j].contains(p):return j
+  # Forgiving margin is used only outside the actual visible petals.
+  stroke=QPainterPathStroker();stroke.setWidth(12)
+  for j in range(len(visible)-1,-1,-1):
+   if not visible[j].isEmpty() and stroke.createStroke(visible[j]).contains(p):return j
   return -1
  def mousePressEvent(self,e):
   if self.closing is not None:return
@@ -69,17 +81,27 @@ class Bloom(InlinePanel):
   if self.closing is not None and time.monotonic()-self.closing>=max(.30,(len(self.labels)-1)*.045+.12):
    QTimer.singleShot(0,lambda:self.done(1 if self.choice==-2 else self.choice+2 if self.choice>=0 else 0));return
   primary=self.hit(self.cursor,elapsed) if self.closing is None else -1
+  paths=[self.transformed_path(i,elapsed) for i in range(len(self.labels))]
+  n=len(paths)
   for i,label in enumerate(self.labels):
    t,x,y,rot,scale=self.geometry_at(i,elapsed)
    if t<=0:continue
-   p.save();p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
+   p.save()
+   if n>=4 and not paths[(i+1)%n].isEmpty():
+    # Mask the underlying petal BEFORE painting its fill, border or hover.
+    # Preserve the covering petal's outline as well. No second paint pass.
+    cover=paths[(i+1)%n]
+    border=QPainterPathStroker();border.setWidth(.8)
+    mask=QPainterPath();mask.addRect(QRectF(-360,-360,720,720))
+    p.setClipPath(mask.subtracted(cover.united(border.createStroke(cover))),Qt.ClipOperation.IntersectClip)
+   p.translate(x,y);p.rotate(rot);p.scale(scale,scale)
    g=QLinearGradient(0,74,0,-74);g.setColorAt(0,QColor('#1d1126'));g.setColorAt(1,QColor('#3a223b'))
    p.setBrush(g);p.setPen(QPen(self.accent.darker(210),.8));p.drawPath(self.path)
    if self.cursor is not None:
     dx=self.cursor.x();dy=self.cursor.y();r=math.hypot(dx,dy)
     theta=math.radians(rot);lx=(dx-x)*math.cos(theta)+(dy-y)*math.sin(theta);ly=-(dx-x)*math.sin(theta)+(dy-y)*math.cos(theta)
     if primary>=0:
-     p.save();p.setClipPath(self.path);p.setPen(Qt.PenStyle.NoPen)
+     p.save();p.setClipPath(self.path,Qt.ClipOperation.IntersectClip);p.setPen(Qt.PenStyle.NoPen)
      if i==primary:
       progress=max(0,min(1,(74-ly)/148))
       light=QLinearGradient(0,74,lx,ly if abs(ly-74)>1 else 73)

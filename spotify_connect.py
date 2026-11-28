@@ -92,7 +92,7 @@ class Connect:
     elif action=='transfer':self.call('','PUT',{'device_ids':[str(data['device'])],'play':True})
     elif action in ('play','pause'):self.call('/'+action,'PUT')
     elif action in ('next','previous'):self.call('/'+action,'POST')
-    elif action=='volume':self.call('/volume?volume_percent='+str(max(0,min(100,int(data['value'])))),'PUT')
+    elif action=='volume':self.call('/volume?volume_percent='+str(max(0,min(100,int(data['value']))))+('&device_id='+urllib.parse.quote(str(data['device']),safe='') if data.get('device') else ''),'PUT')
     elif action=='shuffle':self.call('/shuffle?state='+str(bool(data['value'])).lower(),'PUT')
     elif action=='repeat':self.call('/repeat?state='+str(data['value']),'PUT')
     elif action=='playlist':

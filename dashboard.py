@@ -9,6 +9,9 @@ import urllib.request
 from bloom import Bloom, paint_settings_petal
 from spotify_connect import Connect
 from inline_panel import InlinePanel
+from sakura_sounds import SakuraSounds
+from source_volume import add_volume
+from media_direction import MediaDirection
 from mobile_panel import MobileCompanion
 from discord_connection import DiscordConnection
 from feature_panels import read_profiles,profiles_panel,discord_panel
@@ -46,6 +49,7 @@ class Dashboard(QWidget):
   self.timer.timeout.connect(self.update)
   self.timer.start(16)
   self.load_display()
+  self.sounds=SakuraSounds(self);QTimer.singleShot(250,self.sounds.startup)
   self.game_autohide=AutoHide(self)
   self.tray=None;self.tray_hidden=False;self.tray_lyrics=False
   self.notifications=Notifications(self)
@@ -53,6 +57,8 @@ class Dashboard(QWidget):
   self.support_reply_monitor=SupportReplyMonitor(self)
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
+  self.visor_direction=1;self.visor_command_at=0.
+  self.media_direction=MediaDirection(self.note_visor_direction)
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
   self.profile_timer=QTimer(self);self.profile_timer.timeout.connect(self.refresh_profile);self.profile_timer.start(1000);self.refresh_profile()
   self.metadata_stop=threading.Event();self.local_art_url=''
@@ -88,13 +94,19 @@ class Dashboard(QWidget):
  def publish_chroma(self):
   enabled=bool(self.display_options.get('hardware_visualiser',False))
   color=self.theme_target().name()
+  try:
+   hint=json.loads((self.sync_root/'visor-command.json').read_text())
+   stamp=float(hint.get('time',0))
+   if self.visor_command_at<stamp<=time.time()+1:
+    self.visor_command_at=stamp;self.visor_direction=-1 if hint.get('direction')==-1 else 1
+  except (OSError,ValueError,TypeError):pass
   room_enabled=bool(self.display_options.get('room_sync',False))
   room_devices=tuple(dict.fromkeys(n.strip() for n in str(self.display_options.get('room_device','bulb,cupboard')).split(',') if n.strip()))
   room_level=min(1.,max(self.bars[:24],default=0.)*1.35) if enabled else 1.
   self.room_pending=(tuple(QColor(color).getRgb()[:3]),room_devices,room_level) if room_enabled and room_devices else None
   if not room_enabled:self.room_status='Room sync disabled'
   try:
-   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30))
+   payload=dict(enabled=enabled,color=color,heartbeat=time.time(),bars=self.bars,effect=self.display_options.get('chroma_effect','Spectrum'),palette=self.art_palette if self.display_options.get('album_theme') and not self.game_profile else [],adaptive=self.display_options.get('chroma_adaptive',True),rate=self.display_options.get('chroma_rate',30),visor=self.display_options.get('chroma_visor',True),visor_direction=self.visor_direction,visor_command_at=self.visor_command_at,visor_challenge=self.display_options.get('visor_challenge',False))
    if self.chroma_was_enabled!=enabled or (enabled and time.monotonic()-self.chroma_heartbeat>=.5):
     self.write_setting('dashboard-chroma.json',payload);self.chroma_heartbeat=time.monotonic()
    if enabled:
@@ -186,13 +198,13 @@ class Dashboard(QWidget):
    if self.editor.active:
     options=[('Finish',self.editor.toggle),('Reset layout',self.editor.reset),('Cancel',lambda:None)]
    else:
-    choice=Bloom(self,self.accent,['Lighting','Games','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
+    choice=Bloom(self,self.accent,['Lighting','Spotify','Connections','Appearance','System','Hide to tray'],main_menu=True).exec()-2
     if choice==5:
      QTimer.singleShot(0,self.hide_to_tray);return
     groups=[
      [('Lighting settings',lambda:self.open_settings(1)),('Optional features',lambda:self.open_settings(3))],
-     [('Game settings',lambda:self.open_settings(0)),('Game profiles',self.open_profiles),('Advanced',self.open_sync_settings)],
-     [('Spotify',self.open_player),('Discord',self.open_discord),('Media',self.open_media)],
+     [('Spotify & Game Sync',self.open_player)],
+     [('Discord',self.open_discord),('Media',self.open_media)],
      [('Display settings',lambda:self.open_settings(2)),('Hide lyrics' if getattr(self,'lyrics_window',None) else 'Show lyrics',self.open_lyrics),('Edit layout',self.editor.toggle),('Windowed' if self.isFullScreen() else 'Fullscreen',self.toggle_fullscreen)],
      [('System settings',self.open_system),('Sakura Support',self.open_support),('Exit Sakura',self.close)]
     ]
@@ -292,7 +304,11 @@ class Dashboard(QWidget):
  def playing(self):
   if self.local_playing is not None and (self.spotify_target or not self.player.get('device')):return self.local_playing
   return bool(self.player.get('is_playing'))
+ def note_visor_direction(self,direction):
+  self.visor_direction=direction;self.visor_command_at=time.time()
  def command(self,action,**data):
+  if action in ('previous','next'):
+   self.note_visor_direction(-1 if action=='previous' else 1)
   if action in ('play','pause','previous','next') and self.spotify_target and self.local_playing is not None:
    subprocess.Popen(['playerctl','--player=spotify',action],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
    if action in ('play','pause'):self.local_playing=action=='play'
@@ -304,7 +320,7 @@ class Dashboard(QWidget):
   devices=QComboBox();layout.addRow('Playback device',devices)
   transfer=QPushButton('Transfer playback');transfer.setEnabled(False);layout.addRow(transfer)
   refresh=QPushButton('Refresh devices');layout.addRow(refresh)
-  volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(int((self.player.get('device') or {}).get('volume_percent') or 0));layout.addRow('Volume',volume)
+  add_volume(self,layout)
   playlist=QLineEdit();playlist.setPlaceholderText('Spotify playlist link or ID');layout.addRow('Playlist',playlist)
   play=QPushButton('Play playlist');layout.addRow(play)
   shuffle=QCheckBox('Shuffle');shuffle.setChecked(bool(self.player.get('shuffle_state',False)));layout.addRow(shuffle)
@@ -312,6 +328,9 @@ class Dashboard(QWidget):
   media=QPushButton('Sakura Media library');media.clicked.connect(lambda:dlg.done(4));layout.addRow(media)
   discord=QPushButton('Discord connection');discord.clicked.connect(lambda:dlg.done(3));layout.addRow(discord)
   account=QPushButton('Spotify account settings');account.clicked.connect(lambda:dlg.done(2));layout.addRow(account)
+  game_hint=QLabel('Game Sync • Spotify soundtrack switching requires a connected Spotify account. Game detection and lighting do not.');game_hint.setWordWrap(True);layout.addRow(game_hint)
+  for label,code in [('Game Sync settings',5),('Game profiles',6),('Game mappings and scanner',7)]:
+   button=QPushButton(label);button.clicked.connect(lambda checked=False,code=code:dlg.done(code));layout.addRow(button)
   pending=[0.];seen=[None]
   def send(action,**data):
    pending[0]=time.time();status.setText('Requesting '+action+'…');self.command(action,**data)
@@ -332,7 +351,6 @@ class Dashboard(QWidget):
     pending[0]=0.;status.setText('Spotify did not respond. Check your network and account connection.')
   transfer.clicked.connect(lambda:send('transfer',device=devices.currentData()) if devices.currentData() else None)
   refresh.clicked.connect(lambda:send('refresh'))
-  volume.sliderReleased.connect(lambda:send('volume',value=volume.value()))
   play.clicked.connect(lambda:send('playlist',value=playlist.text()))
   shuffle.toggled.connect(lambda value:send('shuffle',value=value))
   repeat.activated.connect(lambda _:send('repeat',value=repeat.currentText()))
@@ -340,6 +358,9 @@ class Dashboard(QWidget):
   result=dlg.exec();timer.stop()
   if result==2:self.open_account()
   elif result==3:self.open_discord()
+  elif result==5:self.open_settings(0)
+  elif result==6:self.open_profiles()
+  elif result==7:self.open_sync_settings()
   elif result==4:self.open_media()
  def now_playing(self):
   item=self.player.get('item') or {}
@@ -385,7 +406,7 @@ class Dashboard(QWidget):
   dlg=InlinePanel(self);dlg.setWindowTitle('Sakura • Settings');dlg.setMinimumWidth(560)
   dlg.setStyleSheet('QDialog{background:#201329;color:#f5d9ef} QLabel,QCheckBox{color:#f5d9ef} QPushButton,QComboBox{background:#39253e;color:#f5d9ef;padding:8px;border-radius:5px}')
   outer=QVBoxLayout(dlg);tabs=QTabWidget();outer.addWidget(tabs)
-  general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game & Spotify')
+  general=QWidget();g=QFormLayout(general);tabs.addTab(general,'Game Sync');tabs.setTabVisible(0,index==0)
   rgb=QWidget();layout=QVBoxLayout(rgb);form=QFormLayout();layout.addLayout(form);tabs.addTab(rgb,'Lighting')
   display=QWidget();dform=QFormLayout(display);tabs.addTab(display,'Display')
   edit_layout=QPushButton('Edit layout');edit_layout.clicked.connect(lambda:dlg.done(4));dform.addRow(edit_layout)
@@ -408,6 +429,8 @@ class Dashboard(QWidget):
   try:view=json.loads((self.sync_root/'dashboard-display.json').read_text())
   except (OSError,ValueError):view={}
   if not isinstance(view,dict):view={}
+  sounds_enabled=QCheckBox();sounds_enabled.setChecked(bool(view.get('sounds_enabled',True)));dform.addRow('Sakura startup and shutdown sounds',sounds_enabled)
+  sounds_volume=QSlider(Qt.Orientation.Horizontal);sounds_volume.setRange(0,100);sounds_volume.setValue(int(view.get('sounds_volume',70)));dform.addRow('Sakura sounds volume',sounds_volume)
   auto_hide=QCheckBox();auto_hide.setChecked(bool(view.get('game_autohide',True)));dform.addRow('Hide dashboard when a game is on this monitor',auto_hide)
   petals=QCheckBox();petals.setChecked(bool(view.get('petals',True)));dform.addRow('Animated petals',petals)
   visual=QCheckBox();visual.setChecked(bool(view.get('visualiser',True)));dform.addRow('Spotify visualiser',visual)
@@ -427,6 +450,9 @@ class Dashboard(QWidget):
   room_device=QLineEdit(str(view.get('room_device','bulb,cupboard')));features.addWidget(QLabel('Lightctl device names (comma-separated)'));features.addWidget(room_device)
   room_status=QLabel(self.room_status);room_status.setWordWrap(True);features.addWidget(room_status)
   room_timer=QTimer(dlg);room_timer.timeout.connect(lambda:room_status.setText(self.room_status));room_timer.start(500)
+  chroma_visor=QCheckBox('Visor sweep on colour changes');chroma_visor.setChecked(bool(view.get('chroma_visor',True)));features.addWidget(chroma_visor)
+  visor_challenge=QCheckBox('Visor Challenge — reaction minigame (optional)');visor_challenge.setChecked(bool(view.get('visor_challenge',False)));features.addWidget(visor_challenge)
+  challenge_hint=QLabel('Requires Chroma, individually named keyboard LEDs and existing read access to the K55 keyboard. Only checks a target key for 600 ms after a track skip; normal typing is not blocked.');challenge_hint.setWordWrap(True);features.addWidget(challenge_hint)
   chroma_adaptive=QCheckBox('Adaptive audio sensitivity');chroma_adaptive.setChecked(bool(view.get('chroma_adaptive',True)));features.addWidget(chroma_adaptive)
   reactive_hint=QLabel('Automatically runs Sakura Lighting in the background. Keyboard, RAM and mouse react to local Spotify audio; album colours are used when enabled.');reactive_hint.setWordWrap(True);features.addWidget(reactive_hint)
   feature_status=QLabel();feature_status.setWordWrap(True);features.addWidget(feature_status)
@@ -459,6 +485,8 @@ class Dashboard(QWidget):
   lyrics_button=QPushButton('Toggle live lyrics');lyrics_button.clicked.connect(self.open_lyrics);features.addWidget(lyrics_button)
   mobile_pair=QPushButton('Pair phone / show pairing QR');mobile_pair.clicked.connect(self.mobile.show_pairing);features.addWidget(mobile_pair)
   features.addStretch();refresh_feature()
+  if index==0:
+   for tab_index in range(1,tabs.count()):tabs.setTabVisible(tab_index,False)
   tabs.setCurrentIndex(index)
   mode=QComboBox();mode.addItems(['Automatic game effects','Manual static colour','Off (release control)'])
   mode.setCurrentIndex({'auto':0,'manual':1,'off':2}.get(profile.get('chroma_previous_mode',profile.get('mode')),0 if legacy.get('rgb_enabled',False) else 2));form.addRow('Lighting mode',mode)
@@ -499,7 +527,7 @@ class Dashboard(QWidget):
    self.sync_root.mkdir(parents=True,exist_ok=True);tmp=self.sync_root/'dashboard-rgb.tmp';tmp.write_text(json.dumps(data,indent=2));tmp.replace(self.sync_root/'dashboard-rgb.json')
    game={k:v.isChecked() for k,v in controls.items()};game.update(combat=combat.text().strip(),device=device.currentText().strip(),threshold=threshold.value())
    self.write_setting('dashboard-game.request',game)
-   self.write_setting('dashboard-display.json',dict(petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
+   self.write_setting('dashboard-display.json',dict(self.display_options,sounds_enabled=sounds_enabled.isChecked(),sounds_volume=sounds_volume.value(),petals=petals.isChecked(),game_autohide=auto_hide.isChecked(),visualiser=visual.isChecked(),fps=30 if fps.currentIndex()==0 else 60,album_theme=adaptive_theme.isChecked(),hardware_visualiser=hardware_visualiser.isChecked(),chroma_effect=chroma_effect.currentText(),chroma_rate=60 if chroma_rate.currentIndex()==1 else 30,chroma_adaptive=chroma_adaptive.isChecked(),chroma_visor=chroma_visor.isChecked(),visor_challenge=visor_challenge.isChecked(),room_sync=room_sync.isChecked(),room_device=room_device.text().strip() or 'bulb,cupboard'));self.load_display();self.publish_chroma()
   except OSError as e:QMessageBox.warning(self,'RGB settings',str(e))
   if not self.sync_status:self.sync_started=False;self.ensure_sync()
  def write_setting(self,name,data):
@@ -561,6 +589,10 @@ class Dashboard(QWidget):
   self.bars=self.spectrum.tick()
 
  def closeEvent(self, event):
+  if getattr(self,'_closing_sakura',False):event.ignore();return
+  self._closing_sakura=True
+  self.media_direction.close()
+  self.hide();self.sounds.shutdown()
   QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
   self.metadata_stop.set()
