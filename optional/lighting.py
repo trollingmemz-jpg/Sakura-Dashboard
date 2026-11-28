@@ -54,15 +54,17 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
         waves=((now-beat_age,1.),) if ripples is None else ripples
         result=[]
         for i in range(count):
-            x=i/max(1,count-1)
+            x=abs(i/max(1,count-1)-.5) if count>1 else 0.
             combined=0.
             for started,strength in waves:
                 age=now-started
-                width=.055+.025*strength
-                front=age*2.0
+                if age<0 or age>=1.0:continue
+                width=.035+.015*strength
+                # Symmetric wavefronts accelerate exponentially from the centre.
+                front=.5*math.expm1(2.5*age/.95)/math.expm1(2.5)
                 pulse=max(0.,1-abs(x-front)/width)
                 pulse=pulse*pulse*(3-2*pulse)
-                amount=pulse*(.75+.25*strength)*max(0.,1-age*.25)
+                amount=pulse*(.75+.25*strength)*max(0.,1-age*.12)
                 combined=max(combined,amount)
             result.append(tuple(round(c*brightness/100*(.015+.985*combined)) for c in base))
         return result
@@ -305,7 +307,7 @@ def main():
                     beat_at=now
                     ripples.append((now,max(0.,min(1.,bass/max(.45,gain_peak)))))
                     ripples=ripples[-8:]
-                ripples=[wave for wave in ripples if now-wave[0]<.65]
+                ripples=[wave for wave in ripples if now-wave[0]<1.0]
                 bass_avg+=.04*(bass-bass_avg)
                 if meta['adaptive']:bars=[min(1.,v/max(.45,gain_peak)) for v in bars]
                 if effect_name=='Automatic':effect_name='Bass shockwave' if bass_avg>.42 else 'Ambient flow' if energy<.38 else 'Spectrum'
