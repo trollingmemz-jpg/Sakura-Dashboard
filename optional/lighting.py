@@ -51,6 +51,8 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
     if effect=='Ambient flow':
         energy=level(0,65);return [rgb(.2+.55*energy+.25*(1+math.sin(now*2-i*math.tau/max(1,count)))/2) for i in range(count)]
     if effect=='Bass shockwave':
+        return [rgb(max(level(0,12)*.35,max(0.,1-abs(i/max(1,count-1)-beat_age*2.5)*5)*max(0.,1-beat_age))) for i in range(count)]
+    if effect=='Centre ripple':
         waves=((now-beat_age,1.),) if ripples is None else ripples
         result=[]
         for i in range(count):
