@@ -49,6 +49,8 @@ class Dashboard(QWidget):
   self.game_autohide=AutoHide(self)
   self.tray=None;self.tray_hidden=False;self.tray_lyrics=False
   self.notifications=Notifications(self)
+  from support_panel import SupportReplyMonitor
+  self.support_reply_monitor=SupportReplyMonitor(self)
   self.editor=LayoutEditor(self)
   self.room_stop=threading.Event();self.room_pending=None;self.room_status='Room sync disabled';threading.Thread(target=self.room_worker,daemon=True).start()
   self.chroma_socket=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM);self.chroma_socket.setblocking(False);self.chroma_heartbeat=0.;self.chroma_process=None;self.chroma_retry=0.;self.chroma_error='';self.chroma_was_enabled=None;self.chroma_timer=QTimer(self);self.chroma_timer.timeout.connect(self.publish_chroma);self.chroma_timer.setTimerType(Qt.TimerType.PreciseTimer);self.chroma_timer.start(17);self.publish_chroma()
@@ -562,6 +564,7 @@ class Dashboard(QWidget):
   QApplication.instance().setQuitOnLastWindowClosed(True)
   if self.tray:self.tray.hide()
   self.metadata_stop.set()
+  self.support_reply_monitor.close()
   self.notifications.close()
   self.media_bridge.stop();self.discord.disconnect();self.connect.closed=True
   self.sync_timer.stop()
