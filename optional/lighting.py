@@ -58,13 +58,13 @@ def reactive_frame(base,bars,key,count,brightness,effect='Spectrum',palette=(),b
             combined=0.
             for started,strength in waves:
                 age=now-started
-                width=.10+.14*strength
+                width=.055+.025*strength
                 front=age*2.0
                 pulse=max(0.,1-abs(x-front)/width)
                 pulse=pulse*pulse*(3-2*pulse)
-                amount=pulse*(.45+.55*strength)*max(0.,1-age*.65)
-                combined=1-(1-combined)*(1-amount)
-            result.append(rgb(max(level(0,12)*.35,combined)))
+                amount=pulse*(.75+.25*strength)*max(0.,1-age*.25)
+                combined=max(combined,amount)
+            result.append(tuple(round(c*brightness/100*(.015+.985*combined)) for c in base))
         return result
     if effect=='Album palette' and palette:
         return [rgb(level(i*80//count,max(i*80//count+1,(i+1)*80//count)),palette[min(len(palette)-1,i*len(palette)//count)]) for i in range(count)]
